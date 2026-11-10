@@ -1,4 +1,4 @@
-"""excel_output の単体テスト。守るもの: Summary／ケーブル一覧／図番別シートの形と値（D5）。"""
+"""excel_output の単体テスト。守るもの: Summary／ケーブル一覧／図番別シートの形と値（D5・D9）。"""
 import io
 
 import openpyxl
@@ -28,10 +28,20 @@ def _rows(ws):
 
 
 def test_sheet_order_and_names():
-    """守るもの: Summary → ケーブル一覧 → 図番順の図番シート。0件の図面もシートを持つ。"""
-    assert _load(RESULTS).sheetnames == [
-        'Summary', 'ケーブル一覧', 'EE5207-405A', 'EE6892-610-01B',
-    ]
+    """守るもの: Summary → ケーブル一覧 → 図番順の図番シート。
+    図番シートはケーブルが1件以上ある図面だけ（D9。0件の図面は Summary にだけ載る）。"""
+    assert _load(RESULTS).sheetnames == ['Summary', 'ケーブル一覧', 'EE6892-610-01B']
+
+
+def test_sheets_follow_drawing_number_order_and_skip_zero_cable_drawings():
+    """守るもの: 図番シートは図番順に並び、0件の図面は混ざっても飛ばされる（D9）。"""
+    def r(n, cables):
+        return {'drawing_number': n, 'title': '', 'subtitle': '',
+                'cables': [{'cable': c, 'remark': ''} for c in cables]}
+    wb = _load([r('EE0002-393-01A', ['M39002']), r('EE0001-393-01A', []), r('EE0000-393-01A', ['M39001'])])
+    assert wb.sheetnames == ['Summary', 'ケーブル一覧', 'EE0000-393-01A', 'EE0002-393-01A']
+    assert [row[0] for row in _rows(wb['Summary'])[1:]] == [
+        'EE0000-393-01A', 'EE0001-393-01A', 'EE0002-393-01A']  # Summary には0件の図面も載る
 
 
 def test_summary_includes_zero_cable_drawings():
@@ -54,7 +64,7 @@ def test_cable_list_is_long_format_without_zero_drawings():
 
 def test_per_drawing_sheets():
     wb = _load(RESULTS)
-    assert _rows(wb['EE5207-405A']) == [['ケーブル番号', '備考']]  # 見出しのみ
+    assert 'EE5207-405A' not in wb.sheetnames  # 0件の図面のシートは作らない（D9）
     assert _rows(wb['EE6892-610-01B']) == [
         ['ケーブル番号', '備考'],
         ['M65202', 'ACCESSORY CABLE'],
@@ -65,3 +75,9 @@ def test_per_drawing_sheets():
 def test_empty_results_still_produce_workbook():
     wb = _load([])
     assert wb.sheetnames == ['Summary', 'ケーブル一覧']
+
+
+def test_excel_filenames_differ_by_kind():
+    """守るもの: 405（展開接続図）と393（ケーブル製作図）は別の Excel ファイルになる（D8）。"""
+    from model.excel_output import EXCEL_FILENAMES
+    assert EXCEL_FILENAMES == {'405': 'cable_list_405.xlsx', '393': 'cable_list_393.xlsx'}

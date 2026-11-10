@@ -66,6 +66,17 @@ def is_target_filename(name):
     return re.fullmatch(DRAWING_NUMBER_PATTERN, base, re.IGNORECASE) is not None
 
 
+def is_dwg_filename(name):
+    """DWG（DXF でない AutoCAD 形式）か: 拡張子 .dwg かつ拡張子なしの名前が図番の形。
+
+    DWG は ezdxf で読めないので、黙って無視せず利用者に DXF への変換を促すために見分ける。
+    """
+    base, ext = os.path.splitext(os.path.basename(name))
+    if ext.lower() != '.dwg':
+        return False
+    return re.fullmatch(DRAWING_NUMBER_PATTERN, base, re.IGNORECASE) is not None
+
+
 def dedupe_by_name(names):
     """同名の重複を除く。
 

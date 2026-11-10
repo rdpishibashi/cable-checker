@@ -1,7 +1,7 @@
 """ケーブル抽出結果の Excel 出力（streamlit 非依存）。
 
 シート構成: `Summary`（図番ごとの件数）→ `ケーブル一覧`（図番×ケーブル番号の縦持ち）→
-図番ごとのシート（シート名は図番。ケーブル0件の図面は見出しだけ）。
+図番ごとのシート（シート名は図番。**ケーブルが1件以上ある図面だけ**。0件の図面は Summary にだけ載る）。
 """
 import io
 
@@ -9,7 +9,8 @@ import pandas as pd
 
 SUMMARY_SHEET = 'Summary'
 LIST_SHEET = 'ケーブル一覧'
-EXCEL_FILENAME = 'cable_list.xlsx'
+# 入力の種類（405＝展開接続図、393＝ケーブル製作図）ごとに別ファイルにする
+EXCEL_FILENAMES = {'405': 'cable_list_405.xlsx', '393': 'cable_list_393.xlsx'}
 
 SUMMARY_COLUMNS = ['図番', 'タイトル', 'サブタイトル', 'ケーブル数']
 LIST_COLUMNS = ['図番', 'ケーブル番号', '備考']
@@ -48,7 +49,8 @@ def build_workbook(results):
         _write(writer, SUMMARY_SHEET, summary_frame(ordered), header_fmt)
         _write(writer, LIST_SHEET, cable_list_frame(ordered), header_fmt)
         for r in ordered:
-            _write(writer, r['drawing_number'][:31], drawing_frame(r), header_fmt)
+            if r['cables']:
+                _write(writer, r['drawing_number'][:31], drawing_frame(r), header_fmt)
     return output.getvalue()
 
 

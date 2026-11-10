@@ -1,29 +1,45 @@
-"""Cable-checker: 展開接続図の DXF からケーブル番号を抽出して Excel に出力する（View 層）。
+"""Cable-checker: 展開接続図・ケーブル製作図の DXF からケーブル番号を抽出して Excel に出力する（View 層）。
 
 処理は model/ に置き、この画面は入力の受け取り・表示・ダウンロードだけを担う。
+入力の種類（405 展開接続図／393 ケーブル製作図）ごとにタブを分け、ウィジェットのキー・
+セッションのキーも種類ごとに別にする（片方の操作が他方の結果に影響しない）。
 """
 import streamlit as st
 
 from model.cable_extractor import (
-    dedupe_by_name, extract_from_uploads, is_target_filename,
+    dedupe_by_name, extract_from_uploads, is_dwg_filename, is_target_filename,
 )
 from model.excel_output import (
-    EXCEL_FILENAME, build_workbook, drawing_frame, summary_frame,
+    EXCEL_FILENAMES, build_workbook, drawing_frame, summary_frame,
 )
 
 st.set_page_config(page_title="Cable-checker", page_icon="🔌", layout="wide")
 
-RESULT_KEY = 'cable_result'  # {'sig': 入力の署名, 'results': [...], 'errors': [...], 'xlsx': bytes}
+# (種類ID, タブ名, 図面の呼び名, 説明に足す一文)
+KINDS = [
+    ('405', '展開接続図（405）', '展開接続図',
+     "ケーブル番号は図面内の「W No.M39001」形式のラベルから拾います。"),
+    ('393', 'ケーブル製作図（393）', 'ケーブル製作図',
+     "ケーブル番号は、ケーブル一覧表・線番設定表のW No.列に書かれた番号から拾います。"
+     "個々のケーブル製作図はW No.欄が空欄のため、ケーブル0件になります。"),
+]
+
+
+def _result_key(kind):
+    return f'cable_result_{kind}'  # {'sig': 入力の署名, 'results': [...], 'errors': [...], 'xlsx': bytes}
 
 
 def _target_files(uploaded):
     """アップロードから処理対象（図番形式の .dxf・同名は先の1件）を選ぶ。
 
-    Returns: (対象の UploadedFile リスト, 図番形式でないため除外した件数, 同名でスキップした名前)
+    Returns: (対象の UploadedFile リスト, 無視した件数, 同名でスキップした名前, DWG の名前)
+    DWG（図番形式の .dwg）は DXF でないので処理できない。無視した件数には含めない。
     """
+    dwg = [f.name for f in uploaded if is_dwg_filename(f.name)]
     targets = [f for f in uploaded if is_target_filename(f.name)]
     keep, skipped = dedupe_by_name([f.name for f in targets])
-    return [targets[i] for i in keep], len(uploaded) - len(targets), skipped
+    ignored = len(uploaded) - len(targets) - len(dwg)
+    return [targets[i] for i in keep], ignored, skipped, dwg
 
 
 def _signature(files):
@@ -33,27 +49,31 @@ def _signature(files):
 def _render_header():
     st.title("Cable-checker - ケーブル番号の抽出")
     st.write(
-        "展開接続図のDXFファイルから、図番ごとのケーブル番号（`W No.M39001` など）を抽出し、"
-        "Excelに出力します。"
+        "展開接続図またはケーブル製作図のDXFファイルから、図番ごとのケーブル番号"
+        "（`M39001` など）を抽出し、Excelに出力します。"
     )
     with st.expander("ℹ️ プログラム説明", expanded=False):
         st.info("\n".join([
             "図番はファイル名から、タイトル・サブタイトルは図面から取得します。",
-            "ケーブル番号は「W No.」に続く `M`＋数字2桁＋英数字3文字（末尾に英字1文字を許す。"
-            "例: M39001、M06004B、M65A61）のラベルです。全角は半角にそろえます。"
-            "番号の後ろに文字があれば「備考」に入れます。同じ図面内の重複は1つにまとめます。",
+            "ケーブル番号は `M`＋数字2桁＋英数字3文字（末尾に英字1文字を許す。"
+            "例: M39001、M06004B、M65A61）です。全角は半角にそろえます。"
+            "「W No.」に続く番号は、番号の後ろの文字を「備考」に入れます。"
+            "同じ図面内の重複は1つにまとめます。",
             "",
             "**使用手順：**",
-            "1. 展開接続図のDXFファイルをアップロードします（複数可・フォルダ可。"
-            "図番の形式でないファイルは無視されます）",
-            "2. 「ケーブルを抽出」ボタンを押し、結果をExcelでダウンロードします",
+            "1. 入力する図面の種類のタブを選び、DXFファイルをアップロードします（複数可・フォルダ可。"
+            "図番の形式でないファイルは無視されます。DWGファイルは読み込めないので、"
+            "DXFに変換してください）",
+            "2. 「ケーブルを抽出」ボタンを押し、結果をExcelでダウンロードします"
+            "（展開接続図は cable_list_405.xlsx、ケーブル製作図は cable_list_393.xlsx）",
             "",
-            "**Excelファイルの内容：** Summary（図番・タイトル・サブタイトル・ケーブル数）／"
-            "ケーブル一覧（図番×ケーブル番号）／図番ごとのシート",
+            "**Excelファイルの内容：** Summary（図番・タイトル・サブタイトル・ケーブル数。"
+            "ケーブル0件の図面も載せる）／ケーブル一覧（図番×ケーブル番号）／"
+            "図番ごとのシート（ケーブルがある図面だけ）",
         ]))
 
 
-def _run(files):
+def _run(kind, files):
     progress = st.progress(0.0, text="準備中...")
 
     def on_progress(done, total, name):
@@ -62,7 +82,7 @@ def _run(files):
     items = [(f.name, f.getvalue()) for f in files]
     results, errors = extract_from_uploads(items, progress=on_progress)
     progress.empty()
-    st.session_state[RESULT_KEY] = {
+    st.session_state[_result_key(kind)] = {
         'sig': _signature(files),
         'results': results,
         'errors': errors,
@@ -70,50 +90,63 @@ def _run(files):
     }
 
 
-def _render_result(state):
+def _render_result(kind, state):
     for name, message in state['errors']:
         st.error(f"{name} を処理できませんでした: {message}")
     results = sorted(state['results'], key=lambda r: r['drawing_number'])
     total = sum(len(r['cables']) for r in results)
     st.subheader("抽出結果")
     st.caption(f"{len(results)} 図面・ケーブル {total} 件（図面内の重複は1件に集約）")
-    st.dataframe(summary_frame(results), hide_index=True)
+    st.dataframe(summary_frame(results), hide_index=True, key=f'summary_{kind}')
     st.download_button(
-        "Excelをダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAME,
+        "Excelをダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAMES[kind],
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
+        type="primary", key=f'download_{kind}',
     )
     st.subheader("図番ごとのケーブル")
     for r in results:
         label = f"{r['drawing_number']}　{r['subtitle']}（{len(r['cables'])} 件）"
         with st.expander(label):
             if r['cables']:
-                st.dataframe(drawing_frame(r), hide_index=True)
+                st.dataframe(drawing_frame(r), hide_index=True,
+                             key=f"cables_{kind}_{r['drawing_number']}")
             else:
                 st.write("ケーブルはありません。")
 
 
-def main():
-    _render_header()
-    st.subheader("DXFファイルのアップロード")
-    uploaded = st.file_uploader("展開接続図（複数可，フォルダ可）", accept_multiple_files=True)
-    files, ignored, skipped = _target_files(uploaded or [])
+def _render_tab(kind, drawing_name, hint):
+    st.write(hint)
+    uploaded = st.file_uploader(
+        f"{drawing_name}（複数可，フォルダ可）", accept_multiple_files=True,
+        key=f'uploader_{kind}',
+    )
+    files, ignored, skipped, dwg = _target_files(uploaded or [])
 
     if uploaded:
         st.caption(f"処理対象 {len(files)} 件（図番形式でないファイル {ignored} 件は無視）")
     for name in skipped:
         st.warning(f"{name} は同名のファイルが先にあるためスキップしました。")
+    for name in dwg:
+        st.warning(f"{name} はDWGファイルのため読み込めません。DXFに変換してアップロードしてください。")
 
     if not files:
         st.info("図番形式（例: EE6892-405-08A.dxf）のDXFファイルをアップロードしてください。")
         return
 
-    if st.button("ケーブルを抽出", type="primary"):
-        _run(files)
+    if st.button("ケーブルを抽出", type="primary", key=f'run_{kind}'):
+        _run(kind, files)
 
-    state = st.session_state.get(RESULT_KEY)
+    state = st.session_state.get(_result_key(kind))
     if state and state['sig'] == _signature(files):
-        _render_result(state)
+        _render_result(kind, state)
+
+
+def main():
+    _render_header()
+    tabs = st.tabs([k[1] for k in KINDS])
+    for tab, (kind, _, drawing_name, hint) in zip(tabs, KINDS):
+        with tab:
+            _render_tab(kind, drawing_name, hint)
 
 
 main()

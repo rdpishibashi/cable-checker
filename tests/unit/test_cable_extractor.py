@@ -8,6 +8,7 @@ from model.cable_extractor import (
     dedupe_by_name,
     extract_cables,
     find_cables,
+    is_dwg_filename,
     is_target_filename,
 )
 
@@ -113,6 +114,21 @@ def test_two_cables_in_one_label_split_remarks():
 def test_is_target_filename(name, ok):
     """守るもの: 入力フィルタ（a3）。図番に完全一致する .dxf だけを対象にする。"""
     assert is_target_filename(name) is ok
+
+
+@pytest.mark.parametrize('name, ok', [
+    ('EE3298-574-01A.DWG', True),
+    ('EE3298-574-01A.dwg', True),
+    ('sub/EE3298-574-01A.DWG', True),
+    ('memo.dwg', False),                 # 図番形式でない名前は DWG 警告の対象にしない
+    ('EE3298-574-01A.dxf', False),
+    ('EE3298-574-01A', False),
+])
+def test_is_dwg_filename(name, ok):
+    """守るもの: 図番形式の .dwg だけを見分ける（D11）。DWG は読めないので警告を出すために使う。
+    DXF 用の is_target_filename とは排他的（同じ名前が両方に当たらない）。"""
+    assert is_dwg_filename(name) is ok
+    assert not (is_dwg_filename(name) and is_target_filename(name))
 
 
 def test_dedupe_by_name_keeps_first():

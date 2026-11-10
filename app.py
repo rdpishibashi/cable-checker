@@ -1,4 +1,5 @@
-"""Cable-checker: 展開接続図・ケーブル製作図の DXF からケーブル番号を抽出して Excel に出力する（View 層）。
+"""Cable-checker: 展開接続図・ケーブル製作図の DXF からケーブル番号を抽出して Excel に出力し、
+両者の Excel を比較する（View 層）。
 
 処理は model/ に置き、この画面は入力の受け取り・表示・ダウンロードだけを担う。
 入力の種類（405 展開接続図／393 ケーブル製作図）ごとにタブを分け、ウィジェットのキー・
@@ -6,8 +7,12 @@
 """
 import streamlit as st
 
+from model.cable_compare import compare_cables, read_cable_list
 from model.cable_extractor import (
     dedupe_by_name, extract_from_uploads, is_dwg_filename, is_target_filename,
+)
+from model.compare_output import (
+    COMPARE_FILENAME, build_compare_workbook, compare_frame, count_rows,
 )
 from model.excel_output import (
     EXCEL_FILENAMES, build_workbook, drawing_frame, summary_frame,
@@ -23,6 +28,10 @@ KINDS = [
      "ケーブル番号は、ケーブル一覧表・線番設定表のW No.列に書かれた番号から拾います。"
      "個々のケーブル製作図はW No.欄が空欄のため、ケーブル0件になります。"),
 ]
+
+
+COMPARE_TAB = '比較（405と393）'
+COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
 
 
 def _result_key(kind):
@@ -66,6 +75,10 @@ def _render_header():
             "DXFに変換してください）",
             "2. 「ケーブルを抽出」ボタンを押し、結果をExcelでダウンロードします"
             "（展開接続図は cable_list_405.xlsx、ケーブル製作図は cable_list_393.xlsx）",
+            "",
+            "3. 「比較」タブでは、1・2で出力した2つのExcelファイル（展開接続図とケーブル製作図）を"
+            "アップロードし、ケーブル番号ごとに、そのケーブルがある図面の図番を並べて比較します"
+            "（片方にしかないケーブルは、もう一方の図番欄が空白になります）",
             "",
             "**Excelファイルの内容：** Summary（図番・タイトル・サブタイトル・ケーブル数。"
             "ケーブル0件の図面も載せる）／ケーブル一覧（図番×ケーブル番号）／"
@@ -141,12 +154,67 @@ def _render_tab(kind, drawing_name, hint):
         _render_result(kind, state)
 
 
+def _compare_signature(f405, f393):
+    return ((f405.name, f405.size), (f393.name, f393.size))
+
+
+def _run_compare(f405, f393):
+    """2つのExcelを読んで比較し、結果をセッションに保存する。読めなければ ValueError。"""
+    map_405 = read_cable_list(f405, "展開接続図のExcel")
+    map_393 = read_cable_list(f393, "ケーブル製作図のExcel")
+    rows = compare_cables(map_405, map_393)
+    st.session_state[COMPARE_RESULT_KEY] = {
+        'sig': _compare_signature(f405, f393),
+        'rows': rows,
+        'names': (f405.name, f393.name),
+        'xlsx': build_compare_workbook(rows, f405.name, f393.name),
+    }
+
+
+def _render_compare_result(state):
+    rows = state['rows']
+    counts = count_rows(rows)
+    st.subheader("比較結果")
+    st.caption(
+        f"ケーブル {len(rows)} 件（両方にある {counts['both']} 件・"
+        f"展開接続図だけ {counts['405only']} 件・ケーブル製作図だけ {counts['393only']} 件）"
+    )
+    st.dataframe(compare_frame(rows), hide_index=True, key='compare_table')
+    st.download_button(
+        "Excelをダウンロード", data=state['xlsx'], file_name=COMPARE_FILENAME,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary", key='download_compare',
+    )
+
+
+def _render_compare_tab():
+    st.write("展開接続図から出力したExcelと、ケーブル製作図から出力したExcelを比較します。")
+    f405 = st.file_uploader("展開接続図のExcel（cable_list_405.xlsx）", type=['xlsx'], key='compare_405')
+    f393 = st.file_uploader("ケーブル製作図のExcel（cable_list_393.xlsx）", type=['xlsx'], key='compare_393')
+
+    ready = f405 is not None and f393 is not None
+    if not ready:
+        st.info("展開接続図とケーブル製作図、両方のExcelファイルをアップロードしてください。")
+    if st.button("比較", type="primary", key='run_compare', disabled=not ready):
+        try:
+            _run_compare(f405, f393)
+        except ValueError as e:
+            st.session_state.pop(COMPARE_RESULT_KEY, None)
+            st.error(str(e))
+
+    state = st.session_state.get(COMPARE_RESULT_KEY)
+    if ready and state and state['sig'] == _compare_signature(f405, f393):
+        _render_compare_result(state)
+
+
 def main():
     _render_header()
-    tabs = st.tabs([k[1] for k in KINDS])
+    tabs = st.tabs([k[1] for k in KINDS] + [COMPARE_TAB])
     for tab, (kind, _, drawing_name, hint) in zip(tabs, KINDS):
         with tab:
             _render_tab(kind, drawing_name, hint)
+    with tabs[-1]:
+        _render_compare_tab()
 
 
 main()

@@ -154,3 +154,87 @@ def test_only_dwg_files_show_warning_and_no_button():
     at = run_app([('EE3298-574-01A.DWG', b'AC1018')], tab=TAB_393)
     assert any('DWG' in v for v in tab_elements(at, TAB_393, 'warning'))
     assert len(tab_buttons(at, TAB_393)) == 0
+
+
+# ---- 比較タブ（D13〜D17） ----------------------------------------------------------------
+TAB_COMPARE = 2
+COMPARE_405_UPLOADER, COMPARE_393_UPLOADER = 2, 3  # at.file_uploader の並び順（前の2つは DXF 用）
+
+
+def workbook_bytes(drawing_cables):
+    """{図番: [ケーブル番号…]} から、アプリが出力する形の Excel を作る。"""
+    from model.excel_output import build_workbook
+    return build_workbook([
+        {'drawing_number': d, 'title': '', 'subtitle': '',
+         'cables': [{'cable': c, 'remark': ''} for c in cables]}
+        for d, cables in drawing_cables.items()
+    ])
+
+
+def run_compare(f405=None, f393=None):
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    if f405 is not None:
+        at.file_uploader[COMPARE_405_UPLOADER].upload('cable_list_405.xlsx', f405)
+    if f393 is not None:
+        at.file_uploader[COMPARE_393_UPLOADER].upload('cable_list_393.xlsx', f393)
+    return at.run()
+
+
+def test_compare_tab_needs_both_files():
+    """守るもの: 片方または両方が未入力なら案内を出し、比較ボタンを押せない。"""
+    one = workbook_bytes({'EE0001-405A': ['M39001']})
+    for at in (run_compare(), run_compare(f405=one), run_compare(f393=one)):
+        assert not at.exception
+        assert any('両方のExcel' in v for v in tab_elements(at, TAB_COMPARE, 'info'))
+        (button,) = tab_buttons(at, TAB_COMPARE)
+        assert button.disabled
+
+
+def test_compare_tab_shows_result_with_blanks_for_one_sided_cables():
+    """守るもの: 2つのExcelを比較し、ケーブル番号順の表を出す。片方だけのケーブルは相手側の図番が空白（D15）。"""
+    at = run_compare(
+        workbook_bytes({'EE0001-405A': ['M39001', 'M65711']}),
+        workbook_bytes({'EE0009-339A': ['M39001', 'M05008'], 'EE0008-339A': ['M05008']}),
+    )
+    tab_buttons(at, TAB_COMPARE)[0].click().run()
+    assert not at.exception and not at.error
+    frame = at.dataframe[0].value
+    assert frame.columns.tolist() == ['ケーブル番号', '展開接続図の図番', 'ケーブル製作図の図番']
+    assert frame.values.tolist() == [
+        ['M05008', '', 'EE0008-339A、EE0009-339A'],
+        ['M39001', 'EE0001-405A', 'EE0009-339A'],
+        ['M65711', 'EE0001-405A', ''],
+    ]
+    assert at.download_button[0].key == 'download_compare'
+    assert any('ケーブル 3 件' in v for v in tab_elements(at, TAB_COMPARE, 'caption'))
+
+
+def test_compare_tab_reports_unreadable_workbook_and_shows_no_result():
+    """守るもの: このアプリの出力でない Excel は、どのファイルの何が悪いかを st.error で伝え、結果は出さない。"""
+    import io
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active.title = 'Sheet1'
+    buf = io.BytesIO()
+    wb.save(buf)
+    at = run_compare(buf.getvalue(), workbook_bytes({'EE0009-339A': ['M39001']}))
+    tab_buttons(at, TAB_COMPARE)[0].click().run()
+    assert not at.exception
+    assert any('展開接続図のExcel' in e.value and 'シートがありません' in e.value for e in at.error)
+    assert len(at.dataframe) == 0
+    assert 'compare_result' not in at.session_state
+
+
+def test_compare_tab_is_independent_of_extraction_tabs(tmp_path):
+    """守るもの: 比較しても DXF 抽出タブの結果に触れず、逆も同じ（キーの衝突が無い）。"""
+    data = dxf_bytes(tmp_path, ['W No.M39001'])
+    at = run_app([('EE1234-405-01A.dxf', data)], tab=TAB_405)
+    tab_buttons(at, TAB_405)[0].click().run()
+    at.file_uploader[COMPARE_405_UPLOADER].upload('cable_list_405.xlsx', workbook_bytes({'EE0001-405A': ['M39001']}))
+    at.file_uploader[COMPARE_393_UPLOADER].upload('cable_list_393.xlsx', workbook_bytes({'EE0009-339A': ['M39001']}))
+    at.run()
+    tab_buttons(at, TAB_COMPARE)[0].click().run()
+    assert not at.exception
+    assert 'cable_result_405' in at.session_state and 'compare_result' in at.session_state
+    assert 'cable_result_393' not in at.session_state
+    assert at.session_state['cable_result_405']['results'][0]['drawing_number'] == 'EE1234-405-01A'

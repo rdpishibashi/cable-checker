@@ -5,6 +5,7 @@
 """
 import os
 import re
+import tempfile
 import unicodedata
 
 from .extract_labels import extract_labels
@@ -91,6 +92,9 @@ def extract_cables(dxf_path, original_filename):
         {'drawing_number': 図番（拡張子なしのファイル名）, 'title', 'subtitle',
          'cables': find_cables() の結果}
         タイトル・サブタイトルが取れなければ空文字。
+
+    Raises:
+        ValueError: DXF を読めなかったとき（info['error'] の内容）。
     """
     labels, info = extract_labels(
         dxf_path,
@@ -98,9 +102,39 @@ def extract_cables(dxf_path, original_filename):
         extract_title_option=True,
         original_filename=original_filename,
     )
+    # 共有の extract_labels() は読み込み失敗を例外にせず info['error'] に入れて空で返す。
+    # そのままだと「読めなかった図面」が「ケーブル0件の図面」に見えるので、ここで例外にする。
+    if info.get('error'):
+        raise ValueError(info['error'])
     return {
         'drawing_number': os.path.splitext(os.path.basename(original_filename))[0],
         'title': info.get('title') or '',
         'subtitle': info.get('subtitle') or '',
         'cables': find_cables(labels),
     }
+
+
+def extract_from_uploads(items, progress=None):
+    """アップロードされたファイル群を処理する。
+
+    Args:
+        items: [(元のファイル名, bytes), ...]。呼び出し側でフィルタ・同名除去済みであること。
+        progress: 省略可。`progress(完了数, 全体数, ファイル名)` を各ファイルの処理前に呼ぶ。
+
+    Returns:
+        (結果のリスト, エラーのリスト)。エラーは [(ファイル名, メッセージ), ...]。
+        1つのファイルが壊れていても残りは処理を続ける。
+    """
+    results, errors = [], []
+    for i, (name, data) in enumerate(items):
+        if progress:
+            progress(i, len(items), name)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'input.dxf')
+            with open(path, 'wb') as f:
+                f.write(data)
+            try:
+                results.append(extract_cables(path, name))
+            except Exception as e:  # noqa: BLE001 - 壊れた DXF 1件で全体を止めない
+                errors.append((name, f'{type(e).__name__}: {e}'))
+    return results, errors

@@ -143,3 +143,13 @@ def test_extract_cables_uses_filename_and_blank_title(monkeypatch, tmp_path):
     assert seen['extract_drawing_numbers_option'] is True
     assert seen['extract_title_option'] is True
     assert seen['original_filename'] == 'EE6892-405-08A.dxf'
+
+
+def test_extract_cables_raises_when_dxf_unreadable(monkeypatch, tmp_path):
+    """守るもの: 共有の extract_labels() は読み込み失敗を例外にせず info['error'] で返す。
+    それを「ケーブル0件」として黙って出さず、例外にして呼び出し側にエラー表示させる。"""
+    import model.cable_extractor as ce
+
+    monkeypatch.setattr(ce, 'extract_labels', lambda path, **kw: ([], {'error': 'not a DXF'}))
+    with pytest.raises(ValueError, match='not a DXF'):
+        extract_cables(str(tmp_path / 'x.dxf'), 'EE1234-405-01A.dxf')

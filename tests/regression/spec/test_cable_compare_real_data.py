@@ -76,3 +76,20 @@ def test_one_sided_cables_have_blank_other_side(rows):
     assert only_405['drawings_393'] == [] and only_405['drawings_405']
     only_393 = next(r for r in rows if r['cable'] == 'M05008')
     assert only_393['drawings_405'] == [] and only_393['drawings_393']
+
+
+def test_group_diff_on_real_data():
+    """守るもの: 393 実データの28図面（ケーブル数≠0）が、サブタイトル優先で「線番設定表」16図面と
+    「ケーブル一覧表」12図面（`ケ－ブル一覧表` の表記ゆれを含む）の2グループになり、
+    2グループのケーブル製作図ケーブルの和集合が All Diff の393側（210）と一致する。"""
+    from model.cable_compare import compare_groups, read_drawing_titles
+    if not os.path.isdir(SAMPLE_ROOT):
+        pytest.skip('sample-dxf/ がありません（共有データ置き場のない環境）')
+    files = sorted(glob.glob(os.path.join(SET_DIR, '393_ケーブル', '*.dxf')))
+    results = [extract_cables(f, os.path.basename(f)) for f in files]
+    xlsx = build_workbook(results)
+    map_393 = read_cable_list(io.BytesIO(xlsx), '393')
+    groups = compare_groups({}, map_393, read_drawing_titles(io.BytesIO(xlsx), '393'))
+    assert [(g['name'], len(g['drawings'])) for g in groups] == [('ケーブル一覧表', 12), ('線番設定表', 16)]
+    union = {r['cable'] for g in groups for r in g['rows'] if r['drawings_393']}
+    assert union == set(map_393) and len(union) == 210

@@ -209,6 +209,24 @@ def test_compare_tab_shows_result_with_blanks_for_one_sided_cables():
     assert any('ケーブル 3 件' in v for v in tab_elements(at, TAB_COMPARE, 'caption'))
 
 
+def test_compare_tab_shows_all_diff_and_group_diff_tabs():
+    """守るもの: 結果は「All Diff」と「<グループ名> Diff」のサブタブに分かれ、グループ表の393側はその図面だけ。"""
+    from model.excel_output import build_workbook
+    f393 = build_workbook([
+        {'drawing_number': 'EE0009-339A', 'title': 'SYS', 'subtitle': 'ケーブル一覧表',
+         'cables': [{'cable': 'M39001', 'remark': ''}]},
+        {'drawing_number': 'EE0005-339A', 'title': '線番設定表', 'subtitle': '',
+         'cables': [{'cable': 'M05008', 'remark': ''}]},
+    ])
+    at = run_compare(workbook_bytes({'EE0001-405A': ['M39001']}), f393)
+    tab_buttons(at, TAB_COMPARE)[0].click().run()
+    assert not at.exception and not at.error
+    labels = [t.label for t in at.tabs]
+    assert labels[-3:] == ['All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff']
+    assert [df.value.shape[0] for df in at.dataframe] == [2, 1, 2]
+    assert at.dataframe[2].value.values.tolist() == [['M05008', '', 'EE0005-339A'], ['M39001', 'EE0001-405A', '']]
+
+
 def test_compare_tab_reports_unreadable_workbook_and_shows_no_result():
     """守るもの: このアプリの出力でない Excel は、どのファイルの何が悪いかを st.error で伝え、結果は出さない。"""
     import io

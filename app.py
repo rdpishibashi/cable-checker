@@ -7,12 +7,12 @@
 """
 import streamlit as st
 
-from model.cable_compare import compare_cables, read_cable_list
+from model.cable_compare import compare_cables, compare_groups, read_cable_list, read_drawing_titles
 from model.cable_extractor import (
     dedupe_by_name, extract_from_uploads, is_dwg_filename, is_target_filename,
 )
 from model.compare_output import (
-    COMPARE_FILENAME, build_compare_workbook, compare_frame, count_rows,
+    ALL_SHEET, COMPARE_FILENAME, build_compare_workbook, compare_frame, count_rows, group_sheet_names,
 )
 from model.excel_output import (
     EXCEL_FILENAMES, build_workbook, drawing_frame, summary_frame,
@@ -31,7 +31,7 @@ KINDS = [
 
 
 COMPARE_TAB = '比較（405と393）'
-COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
+COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'groups': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
 
 
 def _result_key(kind):
@@ -163,11 +163,13 @@ def _run_compare(f405, f393):
     map_405 = read_cable_list(f405, "展開接続図のExcel")
     map_393 = read_cable_list(f393, "ケーブル製作図のExcel")
     rows = compare_cables(map_405, map_393)
+    groups = compare_groups(map_405, map_393, read_drawing_titles(f393, "ケーブル製作図のExcel"))
     st.session_state[COMPARE_RESULT_KEY] = {
         'sig': _compare_signature(f405, f393),
         'rows': rows,
+        'groups': groups,
         'names': (f405.name, f393.name),
-        'xlsx': build_compare_workbook(rows, f405.name, f393.name),
+        'xlsx': build_compare_workbook(rows, f405.name, f393.name, groups),
     }
 
 
@@ -179,7 +181,14 @@ def _render_compare_result(state):
         f"ケーブル {len(rows)} 件（両方にある {counts['both']} 件・"
         f"展開接続図だけ {counts['405only']} 件・ケーブル製作図だけ {counts['393only']} 件）"
     )
-    st.dataframe(compare_frame(rows), hide_index=True, key='compare_table')
+    groups = state['groups']
+    sheet_names = [ALL_SHEET, *group_sheet_names([g['name'] for g in groups])]
+    for i, (tab, sheet) in enumerate(zip(st.tabs(sheet_names), [rows, *[g['rows'] for g in groups]])):
+        with tab:
+            if i:
+                st.caption(f"グループの図面 {len(groups[i - 1]['drawings'])} 件: "
+                           + "、".join(groups[i - 1]['drawings']))
+            st.dataframe(compare_frame(sheet), hide_index=True, key=f'compare_table_{i}')
     st.download_button(
         "Excelをダウンロード", data=state['xlsx'], file_name=COMPARE_FILENAME,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

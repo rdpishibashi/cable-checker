@@ -8,7 +8,8 @@ import openpyxl
 import pytest
 
 from model.cable_compare import (
-    BOTH, ONLY_393, ONLY_405, compare_cables, read_cable_list, status,
+    BOTH, ONLY_393, ONLY_405, compare_cables, compare_groups, group_key, read_cable_list,
+    read_drawing_titles, status,
 )
 from model.excel_output import build_workbook
 
@@ -116,3 +117,56 @@ def test_compare_with_empty_side():
     rows = compare_cables({}, {'M39001': ['EE0001-339A']})
     assert [status(r) for r in rows] == [ONLY_393]
     assert compare_cables({}, {}) == []
+
+
+# ---- グループ分け ----------------------------------------------------------------------------
+def titled(drawing, title, subtitle, cables):
+    return {'drawing_number': drawing, 'title': title, 'subtitle': subtitle,
+            'cables': [{'cable': c, 'remark': ''} for c in cables]}
+
+
+def test_read_drawing_titles_round_trips_build_workbook():
+    """守るもの: Summary シートの図番・タイトル・サブタイトルを読める（出力と入力の仕様のずれ防止）。"""
+    src = xlsx([titled('EE0001-339A', 'T', 'ケーブル一覧表', ['M39001']), titled('EE0002-339A', '線番設定表', '', [])])
+    assert read_drawing_titles(src, 'x') == {'EE0001-339A': ('T', 'ケーブル一覧表'), 'EE0002-339A': ('線番設定表', '')}
+
+
+def test_read_drawing_titles_errors():
+    with pytest.raises(ValueError, match='「Summary」シートがありません'):
+        read_drawing_titles(raw_xlsx({'Sheet1': [['a']]}), '393')
+    with pytest.raises(ValueError, match='「サブタイトル」列がありません'):
+        read_drawing_titles(raw_xlsx({'Summary': [['図番', 'タイトル']]}), '393')
+
+
+@pytest.mark.parametrize('a, b', [
+    (('', 'ケ－ブル一覧表'), ('', 'ケーブル一覧表')),   # 全角ハイフン／長音
+    (('', 'ＡＢＣ 一覧'), ('', 'abc一覧')),             # 全角・空白・大小文字
+    (('SYS1', 'ケーブル一覧表'), ('SYS2', 'ケーブル一覧表')),  # サブタイトルがあればタイトルは見ない
+])
+def test_group_key_absorbs_notation_variants(a, b):
+    assert group_key(*a) == group_key(*b)
+
+
+def test_group_key_title_used_only_without_subtitle():
+    assert group_key('線番設定表', '') != group_key('線番設定表', 'ケーブル一覧表')
+    assert group_key('', '') == ''
+
+
+def test_compare_groups_subtitle_first_each_drawing_in_one_group():
+    """守るもの: サブタイトル優先で、各図面が1グループだけに入る。表記ゆれは1グループ。0件の図面は対象外。"""
+    titles = {'D1': ('線番設定表', ''), 'D2': ('SYS_A', 'ケーブル一覧表'), 'D3': ('SYS_A', 'ケ－ブル一覧表'),
+              'D4': ('ケーブル製作図', ''), 'D5': ('', '')}
+    map_393 = {'M1': ['D1', 'D2'], 'M2': ['D3'], 'M3': ['D5']}  # D4 はケーブル0件
+    groups = compare_groups({'M1': ['E1']}, map_393, titles)
+    assert [(g['name'], g['drawings']) for g in groups] == [
+        ('ケーブル一覧表', ['D2', 'D3']), ('線番設定表', ['D1']), ('（タイトルなし）', ['D5'])]
+    by = {g['name']: g['rows'] for g in groups}
+    assert [(r['cable'], r['drawings_405'], r['drawings_393']) for r in by['ケーブル一覧表']] == [
+        ('M1', ['E1'], ['D2']), ('M2', [], ['D3'])]
+    assert [r['cable'] for r in by['線番設定表']] == ['M1']
+
+
+def test_compare_groups_unknown_drawing_and_no_cables():
+    """守るもの: Summary に無い図面はタイトルなしグループ。ケーブルが全く無ければグループなし。"""
+    assert [g['name'] for g in compare_groups({}, {'M1': ['D9']}, {})] == ['（タイトルなし）']
+    assert compare_groups({'M1': ['E1']}, {}, {}) == []

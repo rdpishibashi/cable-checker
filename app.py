@@ -35,9 +35,6 @@ COMPARE_TAB = '比較（405と393）'
 COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'groups': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
 
 
-COMPARE_DXF_SELECT_KEY = 'compare_dxf_select'   # 比較タブで viewer に表示中の図面名
-COMPARE_DXF_SIG_KEY = 'compare_dxf_sig'         # 直近にアップロードされていた図面名の並び（増えたら最後を選ぶ）
-
 
 def _viewer_key(kind):
     return f'viewer_file_{kind}'  # 405/393 タブで viewer に表示中の図面名
@@ -229,29 +226,13 @@ def _render_compare_result(state):
 
 
 def _render_compare_viewer():
-    """比較タブの図面表示。DXF を（何回でも）アップロードすると、最後の図面をすぐ viewer で表示する。
-    複数あるときは選択欄で切り替える（一度に描くのは1枚だけ。大きな図面は描画に時間がかかるため）。"""
+    """比較タブの図面表示。DXF を1ファイルアップロードすると、ボタン無しですぐ viewer で表示する
+    （次の図面は、アップロードし直す）。"""
     st.subheader("図面の表示")
     st.write("DXFファイルをアップロードすると、ケーブル番号を含む文字を赤字にして表示します。")
-    uploaded = st.file_uploader("図面（DXF。複数可。続けてアップロードできます）", type=['dxf'],
-                                accept_multiple_files=True, key='compare_dxf')
-    if not uploaded:
-        st.session_state.pop(COMPARE_DXF_SIG_KEY, None)
-        st.session_state.pop(COMPARE_DXF_SELECT_KEY, None)
-        return
-    keep, skipped = dedupe_by_name([f.name for f in uploaded])
-    files = [uploaded[i] for i in keep]
-    for name in skipped:
-        st.warning(f"{name} は同名のファイルが先にあるためスキップしました。")
-    names = [f.name for f in files]
-    # 図面が増えたら、増えた最後の図面を表示する（選択欄は key を持つので、ここで値を入れ替える）
-    previous = st.session_state.get(COMPARE_DXF_SIG_KEY) or ()
-    if tuple(names) != tuple(previous):
-        st.session_state[COMPARE_DXF_SIG_KEY] = tuple(names)
-        if len(names) > len(previous) or st.session_state.get(COMPARE_DXF_SELECT_KEY) not in names:
-            st.session_state[COMPARE_DXF_SELECT_KEY] = names[-1]
-    shown = st.selectbox("表示する図面", names, key=COMPARE_DXF_SELECT_KEY)
-    cable_viewer.render_cable_viewer(shown, files[names.index(shown)].getvalue(), key='viewer_compare_mount')
+    uploaded = st.file_uploader("図面（DXF。1ファイルずつ）", type=['dxf'], key='compare_dxf')
+    if uploaded is not None:
+        cable_viewer.render_cable_viewer(uploaded.name, uploaded.getvalue(), key='viewer_compare_mount')
 
 
 def _render_compare_tab():

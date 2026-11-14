@@ -343,23 +343,21 @@ def compare_dxf_uploader(at):
     return u
 
 
-def test_compare_tab_shows_uploaded_dxf_directly_and_switches(tmp_path, mounted):
-    """守るもの: 比較タブは DXF をアップロードするとボタン無しで直接表示し、続けて足すと最後の図面に切り替わる。"""
+def test_compare_tab_shows_uploaded_dxf_directly_and_replaces(tmp_path, mounted):
+    """守るもの: 比較タブは DXF を1ファイルずつアップロードし、ボタン無しで直接表示する。上げ直すと次の図面になる。"""
     a = dxf_bytes(tmp_path, ['W No.M39001'])
     b = dxf_bytes(tmp_path, ['W No.M39001', 'M06004B'])
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert mounted == []
+    assert not compare_dxf_uploader(at).proto.multiple_files
     compare_dxf_uploader(at).upload('a.dxf', a)
     at.run()
     assert not at.exception
     assert mounted[-1]['data']['fname'] == 'a.dxf' and mounted[-1]['data']['count'] == 1
-    # 続けてアップロード（実ブラウザは一覧に追加される。AppTest は実行ごとに一覧を置き換えるので a・b を両方渡す）
-    compare_dxf_uploader(at).upload('a.dxf', a).upload('b.dxf', b)
+    compare_dxf_uploader(at).upload('b.dxf', b)  # 次の図面
     at.run()
     assert not at.exception
     assert mounted[-1]['data']['fname'] == 'b.dxf' and mounted[-1]['data']['count'] == 2
-    at.selectbox(key='compare_dxf_select').select('a.dxf').run()  # 選択欄で切り替え
-    assert mounted[-1]['data']['fname'] == 'a.dxf'
 
 
 def test_compare_tab_viewer_is_independent_of_excel_comparison(tmp_path, mounted):

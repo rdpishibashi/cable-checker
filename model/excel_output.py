@@ -65,11 +65,11 @@ def _write(writer, sheet_name, df, header_fmt):
     for col, name in enumerate(df.columns):
         ws.write(0, col, name, header_fmt)
         values = df[name].astype(str) if len(df) else []
-        width = max([len(name) * 2] + [_display_width(v) for v in values]) + 2
+        width = max([len(name) * 2] + [display_width(v) for v in values]) + 2
         ws.set_column(col, col, min(width, 60))
     ws.freeze_panes(1, 0)
 
 
-def _display_width(text):
+def display_width(text):
     """全角を2、半角を1として数えた表示幅の目安。"""
     return sum(2 if ord(ch) > 0x2E80 else 1 for ch in text)

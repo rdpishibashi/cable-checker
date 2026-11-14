@@ -10,7 +10,7 @@ import re
 import pandas as pd
 
 from .cable_compare import BOTH, ONLY_393, ONLY_405, status
-from .excel_output import _display_width
+from .excel_output import display_width
 
 SUMMARY_SHEET = 'Summary'
 ALL_SHEET = 'All Diff'
@@ -92,7 +92,7 @@ def build_compare_workbook(rows, name_405, name_393, groups=()):
         ws = writer.sheets[SUMMARY_SHEET]
         for col, name in enumerate(summary.columns):
             ws.write(0, col, name, header_fmt)
-            width = max(_display_width(str(v)) for v in [name, *summary[name]]) + 2
+            width = max(display_width(str(v)) for v in [name, *summary[name]]) + 2
             ws.set_column(col, col, min(width, 60))
 
         row_fmts = {
@@ -112,7 +112,7 @@ def _write_compare_sheet(writer, sheet_name, rows, header_fmt, row_fmts):
     ws = writer.sheets[sheet_name]
     for col, name in enumerate(frame.columns):
         ws.write(0, col, name, header_fmt)
-        width = max(_display_width(str(v)) for v in [name, *frame[name]]) + 2
+        width = max(display_width(str(v)) for v in [name, *frame[name]]) + 2
         ws.set_column(col, col, min(width, 80))
     for i, (r, values) in enumerate(zip(rows, frame.values.tolist()), start=1):
         fmt = row_fmts[status(r)]

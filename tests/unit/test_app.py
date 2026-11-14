@@ -419,3 +419,33 @@ def test_excel_preview_resets_to_summary_when_sheet_disappears(tmp_path):
     extract_button(at, TAB_405).click().run()
     assert not at.exception
     assert at.selectbox(key='preview_sheet_405').value == 'Summary'
+
+
+# ---- Excelプレビューの表示スタイル（DXF-extract-labels と同じ）: 狭いシート選択・図面を表示トグル ----
+
+def test_expander_is_closed_at_first_and_stays_open_after_selection(tmp_path):
+    """守るもの: プレビューの枠は初回は閉じ、シートを選び直したら開いたままになる（無条件に開かない）。"""
+    at = run_app(two_drawings(tmp_path))
+    extract_button(at, TAB_405).click().run()
+    assert not at.exception
+    assert 'preview_expanded_405' not in at.session_state  # 初回は閉じたまま
+    box = at.selectbox(key='preview_sheet_405')
+    box.select('ケーブル一覧').run()
+    assert at.session_state['preview_expanded_405'] is True
+
+
+def test_preview_shows_view_toggle_only_for_drawing_sheets(tmp_path, mounted):
+    """守るもの: 「図面を表示」トグルは図番ごとのシートにだけ出る（Summary・ケーブル一覧には出ない）。
+    ONにすると、その図面の viewer を（図面一覧のボタンを使わずに）プレビューの中に出す。"""
+    at = run_app(two_drawings(tmp_path))
+    extract_button(at, TAB_405).click().run()
+    assert not at.toggle  # Summary
+    at.selectbox(key='preview_sheet_405').select('ケーブル一覧').run()
+    assert not at.toggle
+    at.selectbox(key='preview_sheet_405').select('EE1234-405-01A').run()
+    assert [t.label for t in at.toggle] == ['図面を表示']
+    assert mounted == []  # 既定はOFF
+    at.toggle[0].set_value(True).run()
+    assert not at.exception
+    assert mounted[-1]['data']['fname'] == 'EE1234-405-01A.dxf' and mounted[-1]['data']['count'] == 2
+    assert at.session_state['preview_expanded_405'] is True

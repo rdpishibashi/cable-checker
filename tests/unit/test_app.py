@@ -40,7 +40,7 @@ def tab_buttons(at, tab):
 
 
 def extract_button(at, tab):
-    """そのタブの「ケーブルを抽出」ボタン（図面一覧の「図面を表示」ボタンと区別するためラベルで探す）。"""
+    """そのタブの「ケーブルを抽出」ボタン。"""
     (button,) = [b for b in at.tabs[tab].button if b.label == "ケーブルを抽出"]
     return button
 
@@ -71,7 +71,7 @@ def test_only_non_target_files_show_no_button():
 
 
 def test_extract_single_file(tmp_path):
-    """守るもの: 1ファイルを抽出し、結果表（Excelプレビュー）・ダウンロード・図番別シートが出る（a1）。"""
+    """守るもの: 1ファイルを抽出し、結果表（分析結果プレビュー）・ダウンロード・図番別シートが出る（a1）。"""
     data = dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61 ACCESSORY CABLE', 'MC121A1'])
     at = run_app([('EE1234-405-01A.dxf', data), ('.DS_Store', b'x')])
     assert not at.exception
@@ -82,7 +82,7 @@ def test_extract_single_file(tmp_path):
     summary = at.dataframe[0].value
     assert summary['図番'].tolist() == ['EE1234-405-01A']
     assert summary['ケーブル数'].tolist() == [2]
-    # Excelプレビューのシート選択で図番別のシートに切り替える
+    # 分析結果プレビューのシート選択で図番別のシートに切り替える
     sheet_box = at.selectbox(key='preview_sheet_405')
     assert sheet_box.options == ['Summary', 'ケーブル一覧', 'EE1234-405-01A']
     sheet_box.select('EE1234-405-01A').run()
@@ -122,7 +122,7 @@ def test_393_tab_extracts_and_names_its_own_excel(tmp_path):
     # AppTest はダウンロードのファイル名を公開しない。393 タブのボタンであること（キー）だけ確かめ、
     # 名前の対応は test_excel_output.py::test_excel_filenames_differ_by_kind が守る。
     assert at.download_button[0].key == 'download_393'
-    assert at.download_button[0].proto.label == 'Excelをダウンロード'
+    assert at.download_button[0].proto.label == '分析結果ダウンロード'
 
 
 def test_tabs_are_independent(tmp_path):
@@ -156,8 +156,8 @@ def test_dwg_files_get_a_warning_in_each_tab(tab, tmp_path):
     assert not any('memo.dwg' in v for v in warnings)
     captions = tab_elements(at, tab, 'caption')
     assert any('処理対象 1 件（図番形式でないファイル 1 件は無視）' in v for v in captions)
-    # 有効ファイル1件 → その図面の「図面を表示」と、抽出ボタンの2つだけ（DWG・図番でないファイルのボタンは無い）
-    assert [b.label for b in tab_buttons(at, tab)] == ["図面を表示", "ケーブルを抽出"]
+    # 有効ファイル1件 → 抽出ボタンだけ（DWG・図番でないファイルのボタンは無い）
+    assert [b.label for b in tab_buttons(at, tab)] == ["ケーブルを抽出"]
 
 
 def test_only_dwg_files_show_warning_and_no_button():
@@ -279,66 +279,72 @@ def mounted(monkeypatch):
     return calls
 
 
-def show_button(at, tab, name):
-    (button,) = [b for b in at.tabs[tab].button if b.key == f'show_{"405" if tab == TAB_405 else "393"}_{name}']
-    return button
+def open_viewer(at, tab, sheet):
+    """抽出済みのタブで、図番シートを選んで「図面を表示」トグルを ON にする。"""
+    kind = '405' if tab == TAB_405 else '393'
+    at.selectbox(key=f'preview_sheet_{kind}').select(sheet).run()
+    (toggle,) = [t for t in at.toggle if t.key == f'preview_viewer_{kind}_{sheet}']
+    toggle.set_value(True).run()
 
 
 @pytest.mark.parametrize('tab', [TAB_405, TAB_393])
-def test_viewer_shows_only_after_pressing_show_button(tab, tmp_path, mounted):
-    """守るもの: 一覧に処理対象だけが並び、「図面を表示」を押すまで viewer は出ない。押すと赤字の件数つきで出る。"""
+def test_viewer_is_in_the_preview_and_shows_only_after_toggle(tab, tmp_path, mounted):
+    """守るもの: 図面の viewer は分析結果プレビューの「図面を表示」トグル（図番シート）だけから出る。
+    アップロード直後・抽出直後・トグルOFFでは出ない。ONにすると赤字の件数つきで出る。「アップロードした図面」の一覧は無い。"""
+    kind = '405' if tab == TAB_405 else '393'
     data = dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61', 'MC121A1'])
     at = run_app([('EE1234-405-01A.dxf', data), ('memo.txt', b'x')], tab=tab)
     assert not at.exception
+    assert not any(sh.value == 'アップロードした図面' for sh in at.subheader)
+    assert [b.label for b in tab_buttons(at, tab)] == ["ケーブルを抽出"]
+    extract_button(at, tab).click().run()
     assert mounted == []
-    show_button(at, tab, 'EE1234-405-01A.dxf').click().run()
-    assert not at.exception
+    open_viewer(at, tab, 'EE1234-405-01A')
+    assert not at.exception and not at.warning
     assert len(mounted) == 1
     assert mounted[0]['data']['fname'] == 'EE1234-405-01A.dxf'
     assert mounted[0]['data']['count'] == 2
-    assert not at.warning
+    at.toggle(key=f'preview_viewer_{kind}_EE1234-405-01A').set_value(False).run()
+    assert len(mounted) == 1  # OFF にした後は描き直されない
 
 
-def test_viewer_is_independent_between_tabs(tmp_path, mounted):
-    """守るもの: 405 タブで図面を表示しても 393 タブには viewer も表示中の状態も出ない（キーが別）。"""
+def test_viewer_toggle_is_independent_between_tabs(tmp_path, mounted):
+    """守るもの: 405 タブで図面を表示しても 393 タブには viewer もトグルの状態も出ない（キーが別）。"""
     data = dxf_bytes(tmp_path, ['W No.M39001'])
     at = run_app([('EE1234-405-01A.dxf', data)], tab=TAB_405)
     at.file_uploader[TAB_393].upload('EE1234-393-01A.dxf', data)
     at.run()
-    show_button(at, TAB_405, 'EE1234-405-01A.dxf').click().run()
+    extract_button(at, TAB_405).click().run()
+    extract_button(at, TAB_393).click().run()
+    open_viewer(at, TAB_405, 'EE1234-405-01A')
     assert len(mounted) == 1
-    assert at.session_state['viewer_file_405'] == 'EE1234-405-01A.dxf'
-    assert 'viewer_file_393' not in at.session_state
+    assert at.toggle(key='preview_viewer_405_EE1234-405-01A').value is True
+    assert not [t for t in at.toggle if t.key.startswith('preview_viewer_393')]  # 393 は Summary のまま（トグルなし）
 
 
-def test_viewer_can_be_closed_and_file_removal_hides_it(tmp_path, mounted):
-    data = dxf_bytes(tmp_path, ['W No.M39001'])
-    at = run_app([('EE1234-405-01A.dxf', data)])
-    show_button(at, TAB_405, 'EE1234-405-01A.dxf').click().run()
-    (close,) = [b for b in at.tabs[TAB_405].button if b.key == 'close_viewer_405']
-    close.click().run()
-    assert 'viewer_file_405' not in at.session_state
-    assert len(mounted) == 1  # 閉じた後は描き直されない
+def test_viewer_shows_warning_when_drawing_cannot_be_rendered_and_keeps_page(tmp_path, monkeypatch):
+    """守るもの: 描けない図面は警告だけで、画面（プレビュー・ダウンロード）は壊れない。"""
+    from view import cable_viewer
 
-
-def test_viewer_shows_warning_for_broken_dxf_and_keeps_page(tmp_path, monkeypatch):
-    """守るもの: 描けない図面は警告だけで、画面（抽出ボタンなど）は壊れない。"""
-    at = run_app([('EE1234-405-01A.dxf', b'broken')])
-    show_button(at, TAB_405, 'EE1234-405-01A.dxf').click().run()
+    def boom(_b):
+        raise ValueError('cannot render')
+    monkeypatch.setattr(cable_viewer, 'render_base', boom)
+    at = run_app([('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))])
+    extract_button(at, TAB_405).click().run()
+    open_viewer(at, TAB_405, 'EE1234-405-01A')
     assert not at.exception
     assert any('EE1234-405-01A.dxf を表示できませんでした' in w.value for w in at.warning)
-    extract_button(at, TAB_405)  # 抽出ボタンは残っている
+    assert at.download_button[0].proto.label == '分析結果ダウンロード'
 
 
-def test_viewer_works_before_extraction_and_does_not_touch_results(tmp_path, mounted):
-    """守るもの: 抽出の前でも viewer が使え、抽出結果のセッションには影響しない。"""
-    data = dxf_bytes(tmp_path, ['W No.M39001'])
-    at = run_app([('EE1234-405-01A.dxf', data)])
-    show_button(at, TAB_405, 'EE1234-405-01A.dxf').click().run()
-    assert 'cable_result_405' not in at.session_state
+def test_preview_comes_before_download_button(tmp_path):
+    """守るもの: 「分析結果ダウンロード」ボタンは分析結果プレビューの下（要素の並び順）。"""
+    at = run_app([('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))])
     extract_button(at, TAB_405).click().run()
-    assert not at.exception
-    assert at.session_state['cable_result_405']['results'][0]['cables'][0]['cable'] == 'M39001'
+    types = [c.type for c in at.tabs[TAB_405].children.values()]
+    assert types.index('expander') < types.index('download_button')
+    (expander,) = [c for c in at.tabs[TAB_405].children.values() if c.type == 'expander']
+    assert expander.label == '分析結果プレビュー'
 
 
 def compare_dxf_uploader(at):
@@ -373,7 +379,7 @@ def test_compare_tab_viewer_is_independent_of_excel_comparison(tmp_path, mounted
     assert 'compare_result' not in at.session_state
 
 
-# ---- Excelプレビュー（出力する Excel の全シートを選択して表示） ----
+# ---- 分析結果プレビュー（出力する Excel の全シートを選択して表示） ----
 
 def two_drawings(tmp_path):
     return [('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61 ACCESSORY CABLE'])),
@@ -421,7 +427,7 @@ def test_excel_preview_resets_to_summary_when_sheet_disappears(tmp_path):
     assert at.selectbox(key='preview_sheet_405').value == 'Summary'
 
 
-# ---- Excelプレビューの表示スタイル（DXF-extract-labels と同じ）: 狭いシート選択・図面を表示トグル ----
+# ---- 分析結果プレビューの表示スタイル（DXF-extract-labels と同じ）: 狭いシート選択・図面を表示トグル ----
 
 def test_expander_is_closed_at_first_and_stays_open_after_selection(tmp_path):
     """守るもの: プレビューの枠は初回は閉じ、シートを選び直したら開いたままになる（無条件に開かない）。"""

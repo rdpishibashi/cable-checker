@@ -39,10 +39,6 @@ COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...],
 
 
 
-def _viewer_key(kind):
-    return f'viewer_file_{kind}'  # 405/393 タブで viewer に表示中の図面名
-
-
 def _result_key(kind):
     return f'cable_result_{kind}'  # {'sig': 入力の署名, 'results': [...], 'errors': [...], 'xlsx': bytes}
 
@@ -119,12 +115,12 @@ def _render_result(kind, state, files):
     total = sum(len(r['cables']) for r in results)
     st.subheader("抽出結果")
     st.caption(f"{len(results)} 図面・ケーブル {total} 件（図面内の重複は1件に集約）")
+    _render_excel_preview(kind, results, files)
     st.download_button(
-        "Excelをダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAMES[kind],
+        "分析結果ダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAMES[kind],
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary", key=f'download_{kind}',
     )
-    _render_excel_preview(kind, results, files)
 
 
 def _render_excel_preview(kind, results, files):
@@ -142,7 +138,7 @@ def _render_excel_preview(kind, results, files):
     def mark_expanded():
         st.session_state[open_key] = True
 
-    with st.expander("Excelプレビュー", expanded=st.session_state.get(open_key, False)):
+    with st.expander("分析結果プレビュー", expanded=st.session_state.get(open_key, False)):
         sheet = st.selectbox("シートを選択", names, key=key, on_change=mark_expanded,
                              width=sheet_select_width(names))
         _render_preview_viewer(kind, sheet, files, mark_expanded)
@@ -163,27 +159,6 @@ def _render_preview_viewer(kind, sheet, files, mark_expanded):
         cable_viewer.render_cable_viewer(uf.name, uf.getvalue(), key=f'preview_viewer_mount_{kind}')
 
 
-def _render_drawing_list(kind, files):
-    """処理対象の図面の一覧と、1件ずつの「図面を表示」ボタン。押した図面を viewer に表示する
-    （抽出の前でも使える。表示中の図面がアップロードから無くなったら何も出さない）。"""
-    key = _viewer_key(kind)
-    by_name = {f.name: f for f in files}
-    st.subheader("アップロードした図面")
-    with st.container(height=min(300, 56 * len(files) + 16)):
-        for f in files:
-            col_name, col_btn = st.columns([4, 1])
-            col_name.write(f.name)
-            if col_btn.button("図面を表示", key=f'show_{kind}_{f.name}'):
-                st.session_state[key] = f.name
-    shown = st.session_state.get(key)
-    if shown in by_name:
-        if st.button("図面を閉じる", key=f'close_viewer_{kind}'):
-            st.session_state.pop(key, None)
-            st.rerun()
-        st.caption(f"{shown}（ケーブル番号を含む文字を赤字で表示）")
-        cable_viewer.render_cable_viewer(shown, by_name[shown].getvalue(), key=f'viewer_{kind}_mount')
-
-
 def _render_tab(kind, drawing_name, hint):
     st.write(hint)
     uploaded = st.file_uploader(
@@ -202,8 +177,6 @@ def _render_tab(kind, drawing_name, hint):
     if not files:
         st.info("図番形式（例: EE6892-405-08A.dxf）のDXFファイルをアップロードしてください。")
         return
-
-    _render_drawing_list(kind, files)
 
     if st.button("ケーブルを抽出", type="primary", key=f'run_{kind}'):
         _run(kind, files)

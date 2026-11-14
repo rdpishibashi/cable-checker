@@ -5,6 +5,8 @@
 入力の種類（405 展開接続図／393 ケーブル製作図）ごとにタブを分け、ウィジェットのキー・
 セッションのキーも種類ごとに別にする（片方の操作が他方の結果に影響しない）。
 """
+import os
+
 import streamlit as st
 
 from model.cable_compare import compare_cables, compare_groups, read_cable_list, read_drawing_titles
@@ -15,8 +17,10 @@ from model.compare_output import (
     ALL_SHEET, COMPARE_FILENAME, build_compare_workbook, compare_frame, count_rows, group_sheet_names,
 )
 from model.excel_output import (
-    EXCEL_FILENAMES, build_workbook, drawing_frame, summary_frame,
+    EXCEL_FILENAMES, build_workbook, preview_sheets,
 )
+from view import cable_viewer
+from view.preview_layout import column_widths, sheet_select_width
 
 st.set_page_config(page_title="Cable-checker", page_icon="🔌", layout="wide")
 
@@ -32,6 +36,7 @@ KINDS = [
 
 COMPARE_TAB = '比較（405と393）'
 COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'groups': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
+
 
 
 def _result_key(kind):
@@ -103,28 +108,55 @@ def _run(kind, files):
     }
 
 
-def _render_result(kind, state):
+def _render_result(kind, state, files):
     for name, message in state['errors']:
         st.error(f"{name} を処理できませんでした: {message}")
-    results = sorted(state['results'], key=lambda r: r['drawing_number'])
+    results = state['results']
     total = sum(len(r['cables']) for r in results)
     st.subheader("抽出結果")
     st.caption(f"{len(results)} 図面・ケーブル {total} 件（図面内の重複は1件に集約）")
-    st.dataframe(summary_frame(results), hide_index=True, key=f'summary_{kind}')
+    _render_excel_preview(kind, results, files)
     st.download_button(
-        "Excelをダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAMES[kind],
+        "分析結果ダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAMES[kind],
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary", key=f'download_{kind}',
     )
-    st.subheader("図番ごとのケーブル")
-    for r in results:
-        label = f"{r['drawing_number']}　{r['subtitle']}（{len(r['cables'])} 件）"
-        with st.expander(label):
-            if r['cables']:
-                st.dataframe(drawing_frame(r), hide_index=True,
-                             key=f"cables_{kind}_{r['drawing_number']}")
-            else:
-                st.write("ケーブルはありません。")
+
+
+def _render_excel_preview(kind, results, files):
+    """出力する Excel の中身のプレビュー（DXF-extract-labels の「抽出結果プレビュー」と同じ表示スタイル）。
+
+    シート名で選び、そのシートを Excel と同じ内容の表で出す（シートの組み立ては `preview_sheets()`。
+    ダウンロードする Excel と同じ関数）。図番ごとのシートでは、その図面の「図面を表示」トグルも出す。
+    シートを選び直す・トグルを操作したら、枠を開いたままにする（on_change。無条件に開くと初回から開いてしまう）。"""
+    sheets = dict(preview_sheets(results))
+    names = list(sheets)
+    key, open_key = f'preview_sheet_{kind}', f'preview_expanded_{kind}'
+    if st.session_state.get(key) not in names:
+        st.session_state.pop(key, None)  # 入力を差し替えて前回のシートが無いときは先頭（Summary）に戻す
+
+    def mark_expanded():
+        st.session_state[open_key] = True
+
+    with st.expander("分析結果プレビュー", expanded=st.session_state.get(open_key, False)):
+        sheet = st.selectbox("シートを選択", names, key=key, on_change=mark_expanded,
+                             width=sheet_select_width(names))
+        _render_preview_viewer(kind, sheet, files, mark_expanded)
+        widths, table_width = column_widths(sheets[sheet])
+        column_config = {col: st.column_config.Column(width=px) for col, px in widths.items()}
+        st.dataframe(sheets[sheet], width=table_width, hide_index=True, column_config=column_config,
+                     key=f'preview_table_{kind}')
+
+
+def _render_preview_viewer(kind, sheet, files, mark_expanded):
+    """図番ごとのシート（シート名＝図番を31文字に切ったもの）なら「図面を表示」トグルを出し、ON なら図面を出す。
+    Summary・ケーブル一覧など図面に対応しないシートでは何も出さない。"""
+    by_sheet = {os.path.splitext(f.name)[0][:31]: f for f in files}
+    uf = by_sheet.get(sheet)
+    if uf is None:
+        return
+    if st.toggle("図面を表示", value=False, key=f'preview_viewer_{kind}_{sheet}', on_change=mark_expanded):
+        cable_viewer.render_cable_viewer(uf.name, uf.getvalue(), key=f'preview_viewer_mount_{kind}')
 
 
 def _render_tab(kind, drawing_name, hint):
@@ -151,7 +183,7 @@ def _render_tab(kind, drawing_name, hint):
 
     state = st.session_state.get(_result_key(kind))
     if state and state['sig'] == _signature(files):
-        _render_result(kind, state)
+        _render_result(kind, state, files)
 
 
 def _compare_signature(f405, f393):
@@ -196,6 +228,16 @@ def _render_compare_result(state):
     )
 
 
+def _render_compare_viewer():
+    """比較タブの図面表示。DXF を1ファイルアップロードすると、ボタン無しですぐ viewer で表示する
+    （次の図面は、アップロードし直す）。"""
+    st.subheader("図面の表示")
+    st.write("DXFファイルをアップロードすると、ケーブル番号を含む文字を赤字にして表示します。")
+    uploaded = st.file_uploader("図面（DXF。1ファイルずつ）", type=['dxf'], key='compare_dxf')
+    if uploaded is not None:
+        cable_viewer.render_cable_viewer(uploaded.name, uploaded.getvalue(), key='viewer_compare_mount')
+
+
 def _render_compare_tab():
     st.write("展開接続図から出力したExcelと、ケーブル製作図から出力したExcelを比較します。")
     f405 = st.file_uploader("展開接続図のExcel（cable_list_405.xlsx）", type=['xlsx'], key='compare_405')
@@ -214,6 +256,9 @@ def _render_compare_tab():
     state = st.session_state.get(COMPARE_RESULT_KEY)
     if ready and state and state['sig'] == _compare_signature(f405, f393):
         _render_compare_result(state)
+
+    st.divider()
+    _render_compare_viewer()
 
 
 def main():

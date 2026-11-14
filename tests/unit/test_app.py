@@ -39,6 +39,12 @@ def tab_buttons(at, tab):
     return at.tabs[tab].button
 
 
+def extract_button(at, tab):
+    """そのタブの「ケーブルを抽出」ボタン。"""
+    (button,) = [b for b in at.tabs[tab].button if b.label == "ケーブルを抽出"]
+    return button
+
+
 def tab_elements(at, tab, kind):
     """そのタブの中にある kind（'info' 'caption' 'warning' 'error'）の値のリスト。"""
     return [e.value for e in getattr(at.tabs[tab], kind)]
@@ -65,19 +71,22 @@ def test_only_non_target_files_show_no_button():
 
 
 def test_extract_single_file(tmp_path):
-    """守るもの: 1ファイルを抽出し、結果表・ダウンロード・図番別の展開が出る（a1）。"""
+    """守るもの: 1ファイルを抽出し、結果表（分析結果プレビュー）・ダウンロード・図番別シートが出る（a1）。"""
     data = dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61 ACCESSORY CABLE', 'MC121A1'])
     at = run_app([('EE1234-405-01A.dxf', data), ('.DS_Store', b'x')])
     assert not at.exception
     assert any('処理対象 1 件' in c.value for c in at.caption)
-    tab_buttons(at, TAB_405)[0].click().run()
+    extract_button(at, TAB_405).click().run()
     assert not at.exception
     assert not at.error
     summary = at.dataframe[0].value
     assert summary['図番'].tolist() == ['EE1234-405-01A']
     assert summary['ケーブル数'].tolist() == [2]
-    assert len(at.expander) >= 2  # プログラム説明＋図番別
-    per_drawing = at.dataframe[1].value
+    # 分析結果プレビューのシート選択で図番別のシートに切り替える
+    sheet_box = at.selectbox(key='preview_sheet_405')
+    assert sheet_box.options == ['Summary', 'ケーブル一覧', 'EE1234-405-01A']
+    sheet_box.select('EE1234-405-01A').run()
+    per_drawing = at.dataframe[0].value
     assert per_drawing['ケーブル番号'].tolist() == ['M39001', 'M65A61']
 
 
@@ -93,7 +102,7 @@ def test_broken_dxf_reports_error_and_keeps_going(tmp_path):
     """守るもの: 壊れた DXF が1件あっても、他の図面は処理して結果を出す。"""
     good = dxf_bytes(tmp_path, ['W No.M39001'])
     at = run_app([('EE1234-405-01A.dxf', good), ('EE1234-405-02A.dxf', b'not a dxf')])
-    tab_buttons(at, TAB_405)[0].click().run()
+    extract_button(at, TAB_405).click().run()
     assert not at.exception
     assert any('EE1234-405-02A.dxf' in e.value for e in at.error)
     assert at.dataframe[0].value['図番'].tolist() == ['EE1234-405-01A']
@@ -105,7 +114,7 @@ def test_393_tab_extracts_and_names_its_own_excel(tmp_path):
     table = dxf_bytes(tmp_path, ['W No.', 'M39001', 'M39001', 'M65A61', 'C10004'])
     blank = dxf_bytes(tmp_path, ['W No.', 'Module No.'])
     at = run_app([('EE6892-365-51A.dxf', table), ('EE3298-523-11D.dxf', blank)], tab=TAB_393)
-    tab_buttons(at, TAB_393)[0].click().run()
+    extract_button(at, TAB_393).click().run()
     assert not at.exception and not at.error
     summary = at.dataframe[0].value
     assert summary['図番'].tolist() == ['EE3298-523-11D', 'EE6892-365-51A']
@@ -113,7 +122,7 @@ def test_393_tab_extracts_and_names_its_own_excel(tmp_path):
     # AppTest はダウンロードのファイル名を公開しない。393 タブのボタンであること（キー）だけ確かめ、
     # 名前の対応は test_excel_output.py::test_excel_filenames_differ_by_kind が守る。
     assert at.download_button[0].key == 'download_393'
-    assert at.download_button[0].proto.label == 'Excelをダウンロード'
+    assert at.download_button[0].proto.label == '分析結果ダウンロード'
 
 
 def test_tabs_are_independent(tmp_path):
@@ -121,14 +130,14 @@ def test_tabs_are_independent(tmp_path):
     ウィジェットキー・セッションキーがタブごとに別であること。"""
     data = dxf_bytes(tmp_path, ['W No.M39001'])
     at = run_app([('EE1234-405-01A.dxf', data)], tab=TAB_405)
-    tab_buttons(at, TAB_405)[0].click().run()
+    extract_button(at, TAB_405).click().run()
     assert 'cable_result_405' in at.session_state
     assert 'cable_result_393' not in at.session_state
     assert len(tab_buttons(at, TAB_393)) == 0                      # 393 は未入力のままボタンが無い
     assert any('図番形式' in v for v in tab_elements(at, TAB_393, 'info'))
     # 393 にも別のファイルを入れて抽出しても、405 の結果は消えない
     at.file_uploader[TAB_393].upload('EE9999-393-01A.dxf', dxf_bytes(tmp_path, ['M39002'])).run()
-    tab_buttons(at, TAB_393)[0].click().run()
+    extract_button(at, TAB_393).click().run()
     assert not at.exception
     assert at.session_state['cable_result_405']['results'][0]['drawing_number'] == 'EE1234-405-01A'
     assert at.session_state['cable_result_393']['results'][0]['drawing_number'] == 'EE9999-393-01A'
@@ -147,7 +156,8 @@ def test_dwg_files_get_a_warning_in_each_tab(tab, tmp_path):
     assert not any('memo.dwg' in v for v in warnings)
     captions = tab_elements(at, tab, 'caption')
     assert any('処理対象 1 件（図番形式でないファイル 1 件は無視）' in v for v in captions)
-    assert len(tab_buttons(at, tab)) == 1
+    # 有効ファイル1件 → 抽出ボタンだけ（DWG・図番でないファイルのボタンは無い）
+    assert [b.label for b in tab_buttons(at, tab)] == ["ケーブルを抽出"]
 
 
 def test_only_dwg_files_show_warning_and_no_button():
@@ -247,7 +257,7 @@ def test_compare_tab_is_independent_of_extraction_tabs(tmp_path):
     """守るもの: 比較しても DXF 抽出タブの結果に触れず、逆も同じ（キーの衝突が無い）。"""
     data = dxf_bytes(tmp_path, ['W No.M39001'])
     at = run_app([('EE1234-405-01A.dxf', data)], tab=TAB_405)
-    tab_buttons(at, TAB_405)[0].click().run()
+    extract_button(at, TAB_405).click().run()
     at.file_uploader[COMPARE_405_UPLOADER].upload('cable_list_405.xlsx', workbook_bytes({'EE0001-405A': ['M39001']}))
     at.file_uploader[COMPARE_393_UPLOADER].upload('cable_list_393.xlsx', workbook_bytes({'EE0009-339A': ['M39001']}))
     at.run()
@@ -256,3 +266,192 @@ def test_compare_tab_is_independent_of_extraction_tabs(tmp_path):
     assert 'cable_result_405' in at.session_state and 'compare_result' in at.session_state
     assert 'cable_result_393' not in at.session_state
     assert at.session_state['cable_result_405']['results'][0]['drawing_number'] == 'EE1234-405-01A'
+
+
+# ---- 図面の viewer（ケーブル番号を赤字で表示） ----
+
+@pytest.fixture
+def mounted(monkeypatch):
+    """viewer 部品の差し替え。渡された data を記録する（AppTest は同じプロセスで app.py を走らせる）。"""
+    from view import cable_viewer
+    calls = []
+    monkeypatch.setattr(cable_viewer, 'mount_viewer', lambda **kw: calls.append(kw))
+    return calls
+
+
+def open_viewer(at, tab, sheet):
+    """抽出済みのタブで、図番シートを選んで「図面を表示」トグルを ON にする。"""
+    kind = '405' if tab == TAB_405 else '393'
+    at.selectbox(key=f'preview_sheet_{kind}').select(sheet).run()
+    (toggle,) = [t for t in at.toggle if t.key == f'preview_viewer_{kind}_{sheet}']
+    toggle.set_value(True).run()
+
+
+@pytest.mark.parametrize('tab', [TAB_405, TAB_393])
+def test_viewer_is_in_the_preview_and_shows_only_after_toggle(tab, tmp_path, mounted):
+    """守るもの: 図面の viewer は分析結果プレビューの「図面を表示」トグル（図番シート）だけから出る。
+    アップロード直後・抽出直後・トグルOFFでは出ない。ONにすると赤字の件数つきで出る。「アップロードした図面」の一覧は無い。"""
+    kind = '405' if tab == TAB_405 else '393'
+    data = dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61', 'MC121A1'])
+    at = run_app([('EE1234-405-01A.dxf', data), ('memo.txt', b'x')], tab=tab)
+    assert not at.exception
+    assert not any(sh.value == 'アップロードした図面' for sh in at.subheader)
+    assert [b.label for b in tab_buttons(at, tab)] == ["ケーブルを抽出"]
+    extract_button(at, tab).click().run()
+    assert mounted == []
+    open_viewer(at, tab, 'EE1234-405-01A')
+    assert not at.exception and not at.warning
+    assert len(mounted) == 1
+    assert mounted[0]['data']['fname'] == 'EE1234-405-01A.dxf'
+    assert mounted[0]['data']['count'] == 2
+    at.toggle(key=f'preview_viewer_{kind}_EE1234-405-01A').set_value(False).run()
+    assert len(mounted) == 1  # OFF にした後は描き直されない
+
+
+def test_viewer_toggle_is_independent_between_tabs(tmp_path, mounted):
+    """守るもの: 405 タブで図面を表示しても 393 タブには viewer もトグルの状態も出ない（キーが別）。"""
+    data = dxf_bytes(tmp_path, ['W No.M39001'])
+    at = run_app([('EE1234-405-01A.dxf', data)], tab=TAB_405)
+    at.file_uploader[TAB_393].upload('EE1234-393-01A.dxf', data)
+    at.run()
+    extract_button(at, TAB_405).click().run()
+    extract_button(at, TAB_393).click().run()
+    open_viewer(at, TAB_405, 'EE1234-405-01A')
+    assert len(mounted) == 1
+    assert at.toggle(key='preview_viewer_405_EE1234-405-01A').value is True
+    assert not [t for t in at.toggle if t.key.startswith('preview_viewer_393')]  # 393 は Summary のまま（トグルなし）
+
+
+def test_viewer_shows_warning_when_drawing_cannot_be_rendered_and_keeps_page(tmp_path, monkeypatch):
+    """守るもの: 描けない図面は警告だけで、画面（プレビュー・ダウンロード）は壊れない。"""
+    from view import cable_viewer
+
+    def boom(_b):
+        raise ValueError('cannot render')
+    monkeypatch.setattr(cable_viewer, 'render_base', boom)
+    at = run_app([('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))])
+    extract_button(at, TAB_405).click().run()
+    open_viewer(at, TAB_405, 'EE1234-405-01A')
+    assert not at.exception
+    assert any('EE1234-405-01A.dxf を表示できませんでした' in w.value for w in at.warning)
+    assert at.download_button[0].proto.label == '分析結果ダウンロード'
+
+
+def test_preview_comes_before_download_button(tmp_path):
+    """守るもの: 「分析結果ダウンロード」ボタンは分析結果プレビューの下（要素の並び順）。"""
+    at = run_app([('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))])
+    extract_button(at, TAB_405).click().run()
+    types = [c.type for c in at.tabs[TAB_405].children.values()]
+    assert types.index('expander') < types.index('download_button')
+    (expander,) = [c for c in at.tabs[TAB_405].children.values() if c.type == 'expander']
+    assert expander.label == '分析結果プレビュー'
+
+
+def compare_dxf_uploader(at):
+    (u,) = [u for u in at.file_uploader if u.key == 'compare_dxf']
+    return u
+
+
+def test_compare_tab_shows_uploaded_dxf_directly_and_replaces(tmp_path, mounted):
+    """守るもの: 比較タブは DXF を1ファイルずつアップロードし、ボタン無しで直接表示する。上げ直すと次の図面になる。"""
+    a = dxf_bytes(tmp_path, ['W No.M39001'])
+    b = dxf_bytes(tmp_path, ['W No.M39001', 'M06004B'])
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert mounted == []
+    assert not compare_dxf_uploader(at).proto.multiple_files
+    compare_dxf_uploader(at).upload('a.dxf', a)
+    at.run()
+    assert not at.exception
+    assert mounted[-1]['data']['fname'] == 'a.dxf' and mounted[-1]['data']['count'] == 1
+    compare_dxf_uploader(at).upload('b.dxf', b)  # 次の図面
+    at.run()
+    assert not at.exception
+    assert mounted[-1]['data']['fname'] == 'b.dxf' and mounted[-1]['data']['count'] == 2
+
+
+def test_compare_tab_viewer_is_independent_of_excel_comparison(tmp_path, mounted):
+    """守るもの: 図面の表示は Excel の比較（ボタン・結果）と独立。比較ボタンは従来どおり2つの Excel が揃うまで無効。"""
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    compare_dxf_uploader(at).upload('a.dxf', dxf_bytes(tmp_path, ['W No.M39001']))
+    at.run()
+    (button,) = [b for b in at.tabs[TAB_COMPARE].button if b.key == 'run_compare']
+    assert button.disabled
+    assert 'compare_result' not in at.session_state
+
+
+# ---- 分析結果プレビュー（出力する Excel の全シートを選択して表示） ----
+
+def two_drawings(tmp_path):
+    return [('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61 ACCESSORY CABLE'])),
+            ('EE1234-405-02A.dxf', dxf_bytes(tmp_path, ['no cables here']))]
+
+
+def test_excel_preview_lists_all_sheets_in_excel_order_and_defaults_to_summary(tmp_path):
+    """守るもの: プレビューはダウンロードする Excel と同じシートを同じ順に並べ、既定は Summary。
+    ケーブル0件の図面（02A）のシートは Excel に無いのでプレビューにも無い。"""
+    at = run_app(two_drawings(tmp_path))
+    extract_button(at, TAB_405).click().run()
+    assert not at.exception
+    box = at.selectbox(key='preview_sheet_405')
+    assert box.options == ['Summary', 'ケーブル一覧', 'EE1234-405-01A']
+    assert box.value == 'Summary'
+    assert at.dataframe[0].value['図番'].tolist() == ['EE1234-405-01A', 'EE1234-405-02A']
+    box.select('ケーブル一覧').run()
+    assert at.dataframe[0].value.values.tolist() == [
+        ['EE1234-405-01A', 'M39001', ''], ['EE1234-405-01A', 'M65A61', 'ACCESSORY CABLE']]
+
+
+def test_excel_preview_is_independent_between_tabs(tmp_path):
+    """守るもの: 405 のプレビューのシート選択は 393 タブに影響しない（キーが別）。"""
+    files = two_drawings(tmp_path)
+    at = run_app(files, tab=TAB_405)
+    at.file_uploader(key='uploader_393').upload('EE6892-365-51A.dxf', files[0][1])
+    at.run()
+    extract_button(at, TAB_405).click().run()
+    extract_button(at, TAB_393).click().run()
+    at.selectbox(key='preview_sheet_405').select('ケーブル一覧').run()
+    assert at.selectbox(key='preview_sheet_393').value == 'Summary'
+    assert at.selectbox(key='preview_sheet_405').value == 'ケーブル一覧'
+
+
+def test_excel_preview_resets_to_summary_when_sheet_disappears(tmp_path):
+    """守るもの: 入力を差し替えて前回選んだシートが無くなっても、エラーにならず先頭（Summary）に戻る。"""
+    files = two_drawings(tmp_path)
+    at = run_app(files)
+    extract_button(at, TAB_405).click().run()
+    at.selectbox(key='preview_sheet_405').select('EE1234-405-01A').run()
+    at.file_uploader(key='uploader_405').upload('EE1234-405-02A.dxf', files[1][1])
+    at.run()
+    extract_button(at, TAB_405).click().run()
+    assert not at.exception
+    assert at.selectbox(key='preview_sheet_405').value == 'Summary'
+
+
+# ---- 分析結果プレビューの表示スタイル（DXF-extract-labels と同じ）: 狭いシート選択・図面を表示トグル ----
+
+def test_expander_is_closed_at_first_and_stays_open_after_selection(tmp_path):
+    """守るもの: プレビューの枠は初回は閉じ、シートを選び直したら開いたままになる（無条件に開かない）。"""
+    at = run_app(two_drawings(tmp_path))
+    extract_button(at, TAB_405).click().run()
+    assert not at.exception
+    assert 'preview_expanded_405' not in at.session_state  # 初回は閉じたまま
+    box = at.selectbox(key='preview_sheet_405')
+    box.select('ケーブル一覧').run()
+    assert at.session_state['preview_expanded_405'] is True
+
+
+def test_preview_shows_view_toggle_only_for_drawing_sheets(tmp_path, mounted):
+    """守るもの: 「図面を表示」トグルは図番ごとのシートにだけ出る（Summary・ケーブル一覧には出ない）。
+    ONにすると、その図面の viewer を（図面一覧のボタンを使わずに）プレビューの中に出す。"""
+    at = run_app(two_drawings(tmp_path))
+    extract_button(at, TAB_405).click().run()
+    assert not at.toggle  # Summary
+    at.selectbox(key='preview_sheet_405').select('ケーブル一覧').run()
+    assert not at.toggle
+    at.selectbox(key='preview_sheet_405').select('EE1234-405-01A').run()
+    assert [t.label for t in at.toggle] == ['図面を表示']
+    assert mounted == []  # 既定はOFF
+    at.toggle[0].set_value(True).run()
+    assert not at.exception
+    assert mounted[-1]['data']['fname'] == 'EE1234-405-01A.dxf' and mounted[-1]['data']['count'] == 2
+    assert at.session_state['preview_expanded_405'] is True

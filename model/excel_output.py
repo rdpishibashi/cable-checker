@@ -37,20 +37,25 @@ def drawing_frame(result):
     )
 
 
-def build_workbook(results):
-    """抽出結果（`extract_cables()` の戻り値のリスト）から Excel のバイト列を作る。
+def preview_sheets(results):
+    """出力する Excel の全シートを、Excel と同じ順で `[(シート名, DataFrame), ...]` にする。
 
-    図番順に並べ替えて出力する。
+    画面の「Excelプレビュー」と `build_workbook()` が同じ関数を使うので、プレビューと Excel の内容は一致する。
+    図番順に並べ替える。図番ごとのシートはケーブルが1件以上ある図面だけ（シート名は31文字まで）。
     """
     ordered = sorted(results, key=lambda r: r['drawing_number'])
+    sheets = [(SUMMARY_SHEET, summary_frame(ordered)), (LIST_SHEET, cable_list_frame(ordered))]
+    sheets += [(r['drawing_number'][:31], drawing_frame(r)) for r in ordered if r['cables']]
+    return sheets
+
+
+def build_workbook(results):
+    """抽出結果（`extract_cables()` の戻り値のリスト）から Excel のバイト列を作る（シートは `preview_sheets()`）。"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         header_fmt = writer.book.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1})
-        _write(writer, SUMMARY_SHEET, summary_frame(ordered), header_fmt)
-        _write(writer, LIST_SHEET, cable_list_frame(ordered), header_fmt)
-        for r in ordered:
-            if r['cables']:
-                _write(writer, r['drawing_number'][:31], drawing_frame(r), header_fmt)
+        for name, frame in preview_sheets(results):
+            _write(writer, name, frame, header_fmt)
     return output.getvalue()
 
 
@@ -60,11 +65,11 @@ def _write(writer, sheet_name, df, header_fmt):
     for col, name in enumerate(df.columns):
         ws.write(0, col, name, header_fmt)
         values = df[name].astype(str) if len(df) else []
-        width = max([len(name) * 2] + [_display_width(v) for v in values]) + 2
+        width = max([len(name) * 2] + [display_width(v) for v in values]) + 2
         ws.set_column(col, col, min(width, 60))
     ws.freeze_panes(1, 0)
 
 
-def _display_width(text):
+def display_width(text):
     """全角を2、半角を1として数えた表示幅の目安。"""
     return sum(2 if ord(ch) > 0x2E80 else 1 for ch in text)

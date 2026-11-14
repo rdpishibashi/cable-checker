@@ -81,3 +81,22 @@ def test_excel_filenames_differ_by_kind():
     """守るもの: 405（展開接続図）と393（ケーブル製作図）は別の Excel ファイルになる（D8）。"""
     from model.excel_output import EXCEL_FILENAMES
     assert EXCEL_FILENAMES == {'405': 'cable_list_405.xlsx', '393': 'cable_list_393.xlsx'}
+
+
+def test_preview_sheets_match_workbook_sheets_and_cells():
+    """守るもの: 画面のプレビューと出力する Excel が同じ内容（シート名・順・セルの値）。プレビューが別実装にずれない。"""
+    import io
+    import pandas as pd
+    from model.excel_output import build_workbook, preview_sheets
+    results = [
+        {'drawing_number': 'EE0002-405A', 'title': 't', 'subtitle': '', 'cables': []},
+        {'drawing_number': 'EE0001-405A', 'title': 't', 'subtitle': 's',
+         'cables': [{'cable': 'M39001', 'remark': 'x'}]},
+    ]
+    sheets = preview_sheets(results)
+    assert [n for n, _ in sheets] == ['Summary', 'ケーブル一覧', 'EE0001-405A']
+    book = pd.read_excel(io.BytesIO(build_workbook(results)), sheet_name=None, keep_default_na=False)
+    assert list(book) == [n for n, _ in sheets]
+    for name, frame in sheets:
+        assert book[name].astype(str).values.tolist() == frame.astype(str).values.tolist(), name
+        assert list(book[name].columns) == list(frame.columns)

@@ -15,7 +15,7 @@ from model.compare_output import (
     ALL_SHEET, COMPARE_FILENAME, build_compare_workbook, compare_frame, count_rows, group_sheet_names,
 )
 from model.excel_output import (
-    EXCEL_FILENAMES, build_workbook, drawing_frame, summary_frame,
+    EXCEL_FILENAMES, build_workbook, preview_sheets,
 )
 from view import cable_viewer
 
@@ -112,25 +112,29 @@ def _run(kind, files):
 def _render_result(kind, state):
     for name, message in state['errors']:
         st.error(f"{name} を処理できませんでした: {message}")
-    results = sorted(state['results'], key=lambda r: r['drawing_number'])
+    results = state['results']
     total = sum(len(r['cables']) for r in results)
     st.subheader("抽出結果")
     st.caption(f"{len(results)} 図面・ケーブル {total} 件（図面内の重複は1件に集約）")
-    st.dataframe(summary_frame(results), hide_index=True, key=f'summary_{kind}')
     st.download_button(
         "Excelをダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAMES[kind],
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary", key=f'download_{kind}',
     )
-    st.subheader("図番ごとのケーブル")
-    for r in results:
-        label = f"{r['drawing_number']}　{r['subtitle']}（{len(r['cables'])} 件）"
-        with st.expander(label):
-            if r['cables']:
-                st.dataframe(drawing_frame(r), hide_index=True,
-                             key=f"cables_{kind}_{r['drawing_number']}")
-            else:
-                st.write("ケーブルはありません。")
+    _render_excel_preview(kind, results)
+
+
+def _render_excel_preview(kind, results):
+    """出力する Excel の中身のプレビュー。シート名で選び、そのシートを Excel と同じ内容の表で出す
+    （シートの組み立ては `preview_sheets()`。ダウンロードする Excel と同じ関数）。"""
+    sheets = dict(preview_sheets(results))
+    names = list(sheets)
+    key = f'preview_sheet_{kind}'
+    if st.session_state.get(key) not in names:
+        st.session_state.pop(key, None)  # 入力を差し替えて前回のシートが無いときは先頭（Summary）に戻す
+    st.subheader("Excelプレビュー")
+    sheet = st.selectbox("シート", names, key=key)
+    st.dataframe(sheets[sheet], hide_index=True, key=f'preview_table_{kind}')
 
 
 def _render_drawing_list(kind, files):

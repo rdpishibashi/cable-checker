@@ -71,7 +71,7 @@ def test_only_non_target_files_show_no_button():
 
 
 def test_extract_single_file(tmp_path):
-    """守るもの: 1ファイルを抽出し、結果表・ダウンロード・図番別の展開が出る（a1）。"""
+    """守るもの: 1ファイルを抽出し、結果表（Excelプレビュー）・ダウンロード・図番別シートが出る（a1）。"""
     data = dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61 ACCESSORY CABLE', 'MC121A1'])
     at = run_app([('EE1234-405-01A.dxf', data), ('.DS_Store', b'x')])
     assert not at.exception
@@ -82,8 +82,11 @@ def test_extract_single_file(tmp_path):
     summary = at.dataframe[0].value
     assert summary['図番'].tolist() == ['EE1234-405-01A']
     assert summary['ケーブル数'].tolist() == [2]
-    assert len(at.expander) >= 2  # プログラム説明＋図番別
-    per_drawing = at.dataframe[1].value
+    # Excelプレビューのシート選択で図番別のシートに切り替える
+    sheet_box = at.selectbox(key='preview_sheet_405')
+    assert sheet_box.options == ['Summary', 'ケーブル一覧', 'EE1234-405-01A']
+    sheet_box.select('EE1234-405-01A').run()
+    per_drawing = at.dataframe[0].value
     assert per_drawing['ケーブル番号'].tolist() == ['M39001', 'M65A61']
 
 
@@ -368,3 +371,51 @@ def test_compare_tab_viewer_is_independent_of_excel_comparison(tmp_path, mounted
     (button,) = [b for b in at.tabs[TAB_COMPARE].button if b.key == 'run_compare']
     assert button.disabled
     assert 'compare_result' not in at.session_state
+
+
+# ---- Excelプレビュー（出力する Excel の全シートを選択して表示） ----
+
+def two_drawings(tmp_path):
+    return [('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61 ACCESSORY CABLE'])),
+            ('EE1234-405-02A.dxf', dxf_bytes(tmp_path, ['no cables here']))]
+
+
+def test_excel_preview_lists_all_sheets_in_excel_order_and_defaults_to_summary(tmp_path):
+    """守るもの: プレビューはダウンロードする Excel と同じシートを同じ順に並べ、既定は Summary。
+    ケーブル0件の図面（02A）のシートは Excel に無いのでプレビューにも無い。"""
+    at = run_app(two_drawings(tmp_path))
+    extract_button(at, TAB_405).click().run()
+    assert not at.exception
+    box = at.selectbox(key='preview_sheet_405')
+    assert box.options == ['Summary', 'ケーブル一覧', 'EE1234-405-01A']
+    assert box.value == 'Summary'
+    assert at.dataframe[0].value['図番'].tolist() == ['EE1234-405-01A', 'EE1234-405-02A']
+    box.select('ケーブル一覧').run()
+    assert at.dataframe[0].value.values.tolist() == [
+        ['EE1234-405-01A', 'M39001', ''], ['EE1234-405-01A', 'M65A61', 'ACCESSORY CABLE']]
+
+
+def test_excel_preview_is_independent_between_tabs(tmp_path):
+    """守るもの: 405 のプレビューのシート選択は 393 タブに影響しない（キーが別）。"""
+    files = two_drawings(tmp_path)
+    at = run_app(files, tab=TAB_405)
+    at.file_uploader(key='uploader_393').upload('EE6892-365-51A.dxf', files[0][1])
+    at.run()
+    extract_button(at, TAB_405).click().run()
+    extract_button(at, TAB_393).click().run()
+    at.selectbox(key='preview_sheet_405').select('ケーブル一覧').run()
+    assert at.selectbox(key='preview_sheet_393').value == 'Summary'
+    assert at.selectbox(key='preview_sheet_405').value == 'ケーブル一覧'
+
+
+def test_excel_preview_resets_to_summary_when_sheet_disappears(tmp_path):
+    """守るもの: 入力を差し替えて前回選んだシートが無くなっても、エラーにならず先頭（Summary）に戻る。"""
+    files = two_drawings(tmp_path)
+    at = run_app(files)
+    extract_button(at, TAB_405).click().run()
+    at.selectbox(key='preview_sheet_405').select('EE1234-405-01A').run()
+    at.file_uploader(key='uploader_405').upload('EE1234-405-02A.dxf', files[1][1])
+    at.run()
+    extract_button(at, TAB_405).click().run()
+    assert not at.exception
+    assert at.selectbox(key='preview_sheet_405').value == 'Summary'

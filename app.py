@@ -17,6 +17,7 @@ from model.compare_output import (
 from model.excel_output import (
     EXCEL_FILENAMES, build_workbook, drawing_frame, summary_frame,
 )
+from view import cable_viewer
 
 st.set_page_config(page_title="Cable-checker", page_icon="🔌", layout="wide")
 
@@ -32,6 +33,14 @@ KINDS = [
 
 COMPARE_TAB = '比較（405と393）'
 COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'groups': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
+
+
+COMPARE_DXF_SELECT_KEY = 'compare_dxf_select'   # 比較タブで viewer に表示中の図面名
+COMPARE_DXF_SIG_KEY = 'compare_dxf_sig'         # 直近にアップロードされていた図面名の並び（増えたら最後を選ぶ）
+
+
+def _viewer_key(kind):
+    return f'viewer_file_{kind}'  # 405/393 タブで viewer に表示中の図面名
 
 
 def _result_key(kind):
@@ -127,6 +136,27 @@ def _render_result(kind, state):
                 st.write("ケーブルはありません。")
 
 
+def _render_drawing_list(kind, files):
+    """処理対象の図面の一覧と、1件ずつの「図面を表示」ボタン。押した図面を viewer に表示する
+    （抽出の前でも使える。表示中の図面がアップロードから無くなったら何も出さない）。"""
+    key = _viewer_key(kind)
+    by_name = {f.name: f for f in files}
+    st.subheader("アップロードした図面")
+    with st.container(height=min(300, 56 * len(files) + 16)):
+        for f in files:
+            col_name, col_btn = st.columns([4, 1])
+            col_name.write(f.name)
+            if col_btn.button("図面を表示", key=f'show_{kind}_{f.name}'):
+                st.session_state[key] = f.name
+    shown = st.session_state.get(key)
+    if shown in by_name:
+        if st.button("図面を閉じる", key=f'close_viewer_{kind}'):
+            st.session_state.pop(key, None)
+            st.rerun()
+        st.caption(f"{shown}（ケーブル番号を含む文字を赤字で表示）")
+        cable_viewer.render_cable_viewer(shown, by_name[shown].getvalue(), key=f'viewer_{kind}_mount')
+
+
 def _render_tab(kind, drawing_name, hint):
     st.write(hint)
     uploaded = st.file_uploader(
@@ -145,6 +175,8 @@ def _render_tab(kind, drawing_name, hint):
     if not files:
         st.info("図番形式（例: EE6892-405-08A.dxf）のDXFファイルをアップロードしてください。")
         return
+
+    _render_drawing_list(kind, files)
 
     if st.button("ケーブルを抽出", type="primary", key=f'run_{kind}'):
         _run(kind, files)
@@ -196,6 +228,32 @@ def _render_compare_result(state):
     )
 
 
+def _render_compare_viewer():
+    """比較タブの図面表示。DXF を（何回でも）アップロードすると、最後の図面をすぐ viewer で表示する。
+    複数あるときは選択欄で切り替える（一度に描くのは1枚だけ。大きな図面は描画に時間がかかるため）。"""
+    st.subheader("図面の表示")
+    st.write("DXFファイルをアップロードすると、ケーブル番号を含む文字を赤字にして表示します。")
+    uploaded = st.file_uploader("図面（DXF。複数可。続けてアップロードできます）", type=['dxf'],
+                                accept_multiple_files=True, key='compare_dxf')
+    if not uploaded:
+        st.session_state.pop(COMPARE_DXF_SIG_KEY, None)
+        st.session_state.pop(COMPARE_DXF_SELECT_KEY, None)
+        return
+    keep, skipped = dedupe_by_name([f.name for f in uploaded])
+    files = [uploaded[i] for i in keep]
+    for name in skipped:
+        st.warning(f"{name} は同名のファイルが先にあるためスキップしました。")
+    names = [f.name for f in files]
+    # 図面が増えたら、増えた最後の図面を表示する（選択欄は key を持つので、ここで値を入れ替える）
+    previous = st.session_state.get(COMPARE_DXF_SIG_KEY) or ()
+    if tuple(names) != tuple(previous):
+        st.session_state[COMPARE_DXF_SIG_KEY] = tuple(names)
+        if len(names) > len(previous) or st.session_state.get(COMPARE_DXF_SELECT_KEY) not in names:
+            st.session_state[COMPARE_DXF_SELECT_KEY] = names[-1]
+    shown = st.selectbox("表示する図面", names, key=COMPARE_DXF_SELECT_KEY)
+    cable_viewer.render_cable_viewer(shown, files[names.index(shown)].getvalue(), key='viewer_compare_mount')
+
+
 def _render_compare_tab():
     st.write("展開接続図から出力したExcelと、ケーブル製作図から出力したExcelを比較します。")
     f405 = st.file_uploader("展開接続図のExcel（cable_list_405.xlsx）", type=['xlsx'], key='compare_405')
@@ -214,6 +272,9 @@ def _render_compare_tab():
     state = st.session_state.get(COMPARE_RESULT_KEY)
     if ready and state and state['sig'] == _compare_signature(f405, f393):
         _render_compare_result(state)
+
+    st.divider()
+    _render_compare_viewer()
 
 
 def main():

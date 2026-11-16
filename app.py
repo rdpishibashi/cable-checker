@@ -22,7 +22,7 @@ from model.excel_output import (
 from view import cable_viewer
 from view.preview_layout import column_widths, sheet_select_width
 
-st.set_page_config(page_title="Cable-checker", page_icon="🔌", layout="wide")
+st.set_page_config(page_title="Cable-checker - 展開図-ケーブル図 ケーブル番号比較", page_icon="🔌", layout="wide")
 
 # (種類ID, タブ名, 図面の呼び名, 説明に足す一文)
 KINDS = [
@@ -61,7 +61,7 @@ def _signature(files):
 
 
 def _render_header():
-    st.title("Cable-checker - ケーブル番号の抽出")
+    st.title("Cable-checker - 展開図-ケーブル図 ケーブル番号比較")
     st.write(
         "展開接続図またはケーブル製作図のDXFファイルから、図番ごとのケーブル番号"
         "（`M39001` など）を抽出し、Excelに出力します。"

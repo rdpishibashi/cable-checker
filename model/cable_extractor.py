@@ -13,8 +13,9 @@ from .extract_labels import extract_labels
 # 図番（共有 extract_labels.py の DRAWING_NUMBER_PATTERN と同じ）
 DRAWING_NUMBER_PATTERN = r'[A-Z]{2}\d{4}-\d{3}(?:-\d{2})?[A-Z]'
 
-# ケーブル番号本体: M＋数字2桁＋英数字3文字＋（末尾英字1文字）。例: M39001 / M06004B / M65A61
-_CABLE_BODY = r'M\d{2}[0-9A-Z]{3}[A-Z]?'
+# ケーブル番号本体: M または C＋数字2桁＋英数字3文字＋（末尾英字1文字）。例: M39001 / M06004B / M65A61 / C10021（C 始まりも番号。2026-11-18 ユーザー決定。X03110 等は番号でない）
+_CABLE_BODY = r'[MC]\d{2}[0-9A-Z]{3}[A-Z]?'
+CABLE_BODY = _CABLE_BODY  # 整合性チェックなど他モジュールが共用する公開名
 # 直後が英数字なら別の語（MC121A1 等）なので不可
 _WNO_PATTERN = re.compile(
     r'(?<![0-9A-Z])W\s*NO\.?\s*(' + _CABLE_BODY + r')(?![0-9A-Z])', re.IGNORECASE

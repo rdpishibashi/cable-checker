@@ -118,7 +118,7 @@ def test_393_tab_extracts_and_names_its_own_excel(tmp_path):
     assert not at.exception and not at.error
     summary = at.dataframe[0].value
     assert summary['図番'].tolist() == ['EE3298-523-11D', 'EE6892-365-51A']
-    assert summary['ケーブル数'].tolist() == [0, 2]  # 重複は1件・C10004 型は拾わない
+    assert summary['ケーブル数'].tolist() == [0, 3]  # 重複は1件・C10004 も拾う（2026-11-18 に C 始まりをケーブル番号にした。2→3）
     # AppTest はダウンロードのファイル名を公開しない。393 タブのボタンであること（キー）だけ確かめ、
     # 名前の対応は test_excel_output.py::test_excel_filenames_differ_by_kind が守る。
     assert at.download_button[0].key == 'download_393'

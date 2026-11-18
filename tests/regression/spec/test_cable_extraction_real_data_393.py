@@ -3,6 +3,13 @@
 2026-11-18 変更: C 始まりもケーブル番号にした（ユーザー決定）ので EE3298-639-02G +2（C10021・C35045）・
 EE3298-653-58A +1（C10004）で258→261件。DWG から変換した6件（568-01A・574-01A・574-02A・574-30A・
 574-33A・637-02E。いずれもケーブル0件）を足して100→106件、0件の図面は72→78。
+2026-11-18 変更（2）: EE3298-637-02E を差し替えた。最初の変換版は文字がすべて輪郭線に分解されていて文字0件だったが、
+元の DWG には文字が残っていたので LibreDWG で個別に変換し直した（Cable-checker の処理用の入力。ユーザー決定）。
+線番設定表として読め、ケーブル6件（M39004・M39005・M39138・M57021・M62015・M87004）。
+ケーブルのある図面は28→29、合計261→267件、0件の図面は78→77。
+2026-11-18 変更（3）: 正本 DXF-extract-labels v3.22.4（タイトル欄の属性を図番・タイトル判定の手がかりにする）を取り込み、
+DWG から変換した古い図面5件（568-01A・574-01A・574-02A・574-30A・574-33A）のタイトルが `F` から `ケーブル製作図`／
+`ケ－ブル製作図` になった。タイトルで数える製作図は70→75（変換5件はすべてケーブル0件）。637-02E は `線番設定表`。
 
 このテストが守るもの: ケーブル製作図セットに対しても、405 と同じ抽出規則（D10）で
 ケーブル一覧表・線番設定表の W No. 列の番号が拾え、W No. 欄が空欄の製作図は0件になること。
@@ -10,8 +17,8 @@ EE3298-653-58A +1（C10004）で258→261件。DWG から変換した6件（568-
 受入条件:
   Given sample-dxf/dataset/ME25-7103-0_Cu_R1chamber/393_ケーブル/ の106 DXF
   When  extract_cables() を各図面に実行する
-  Then  - ケーブルがある図面は EXPECTED_COUNTS の28図面で、図面ごとのケーブル数が一致する（計261件）
-        - 残り78図面（ケーブル製作図70＋注意事項・ラベル仕様書2＋変換した6件）は0件
+  Then  - ケーブルがある図面は EXPECTED_COUNTS の29図面で、図面ごとのケーブル数が一致する（計267件）
+        - 残り77図面（ケーブル製作図75〈元の70＋変換した5件〉＋注意事項・ラベル仕様書2）は0件
         - W No. 列の C 始まり（C10004 等）は拾い、X 始まり（X03110 等）は拾わない
         - 改訂注記（M06004B追加/KURIHARA）は拾わない
 
@@ -34,10 +41,10 @@ DATA_DIR = os.path.join(SAMPLE_ROOT, 'dataset', 'ME25-7103-0_Cu_R1chamber', '393
 
 EXPECTED_DXF_COUNT = 106
 
-# ケーブルがある図面（線番設定表16＋ケーブル一覧表系12）。それ以外の72図面は0件
+# ケーブルがある図面（線番設定表17＋ケーブル一覧表系12）。それ以外の77図面は0件
 EXPECTED_COUNTS = {
     'EE3298-625-97B': 2, 'EE3298-634-07E': 3, 'EE3298-637-03R': 7, 'EE3298-637-50C': 5,
-    'EE3298-639-02G': 5, 'EE3298-639-42B': 1, 'EE3298-639-43L': 7, 'EE3298-651-08C': 3,
+    'EE3298-637-02E': 6, 'EE3298-639-02G': 5, 'EE3298-639-42B': 1, 'EE3298-639-43L': 7, 'EE3298-651-08C': 3,
     'EE3298-651-91B': 2, 'EE3298-653-58A': 2, 'EE3298-656-51A': 1, 'EE3298-656-55A': 1,
     'EE3298-656-65A': 1, 'EE3298-678-03K': 12, 'EE3298-695-23A': 2, 'EE3805-638-01D': 83,
     'EE6888-306-51D': 14, 'EE6888-374-51A': 6, 'EE6892-339-51C': 20, 'EE6892-339-52B': 28,
@@ -65,18 +72,18 @@ def results():
 def test_cable_counts_per_drawing(results):
     got = {k: len(r['cables']) for k, r in results.items() if r['cables']}
     assert got == EXPECTED_COUNTS
-    assert sum(got.values()) == 261
+    assert sum(got.values()) == 267
 
 
 def test_all_other_drawings_have_no_cables(results):
     zero = [k for k, r in results.items() if not r['cables']]
-    assert len(zero) == EXPECTED_DXF_COUNT - len(EXPECTED_COUNTS) == 78
+    assert len(zero) == EXPECTED_DXF_COUNT - len(EXPECTED_COUNTS) == 77
 
 
 def test_cable_production_drawings_have_zero_cables(results):
-    """ケーブル製作図（W No. 欄が空欄）70件はすべて0件。表記ゆれ（ケ－ブル）も含む。"""
+    """ケーブル製作図（W No. 欄が空欄）75件はすべて0件。表記ゆれ（ケ－ブル）も含む（75＝元の70＋DWG から変換した5件）。"""
     production = [r for r in results.values() if (r['title'] or '').replace('－', 'ー') == 'ケーブル製作図']
-    assert len(production) == 70
+    assert len(production) == 75
     assert all(not r['cables'] for r in production)
 
 

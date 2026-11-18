@@ -6,14 +6,25 @@
 受入条件:
   Given 405_展開図/（23 DXF）と 393_ケーブル/（106 DXF）から作った 2 つの Excel（build_workbook）
   When  read_cable_list() で読み compare_cables() で突き合わせる
-  Then  - 展開接続図 110 ケーブル、ケーブル製作図 213 ケーブル
-        - 両方にある 108、展開接続図だけ 2（M65711・M65959）、ケーブル製作図だけ 105
+  Then  - 展開接続図 110 ケーブル、ケーブル製作図 215 ケーブル
+        - 両方にある 108、展開接続図だけ 2（M65711・M65959）、ケーブル製作図だけ 107
         - M39001 は 405 の EE6892-405-08A と 393 の EE6892-339-51C に載る
         - 結果はケーブル番号の昇順
 
 数は、ユーザーが実際にアプリで出力した cable_list_405.xlsx・cable_list_393.xlsx の `ケーブル一覧` シートを
 別に集計した値と一致する（2026-11-10 確認）。DXF からの抽出結果（EXPECTED_COUNTS 等）は
 test_cable_extraction_real_data*.py が別に守る。
+
+2026-11-18 変更（2）: EE3298-637-02E を差し替えた。最初の変換版は文字がすべて輪郭線に分解されていて文字0件だったが、
+元の DWG には文字が残っていたので LibreDWG で個別に変換し直した（Cable-checker の処理用の入力。ユーザー決定）。
+線番設定表として読め、ケーブル6件（M39004・M39005・M39138・M57021・M62015・M87004）。
+393 にだけ新しく増えたのは M39138・M62015 の2件（他の4件は 637-03R 等に既にある）で、393 213→215・
+ケーブル製作図だけ 105→107・全体 215→217。両方にある 108 は変わらない。
+グループ分けでは、2026-11-18 の差し替え直後は 637-02E のタイトルが `F` と取れて1図面だけの `F` グループができていた
+（この古い図面はタイトル欄ブロック ULVAC_TITLE_05 が図番・タイトルを属性〈ATTRIB。DWG.NO・TITLE〉で持ち、共有
+extract_labels() が ATTRIB を拾わないため図番が見つからず、図面枠の区画記号 F を拾っていた）。同日、正本 DXF-extract-labels の
+v3.22.4 で属性を図番・タイトルの判定の手がかりにするフォールバックを入れ、全コピーに伝播して解消した。
+637-02E のタイトルは `線番設定表`、グループは ケーブル一覧表 12・線番設定表 17 の2つ。
 """
 import glob
 import io
@@ -51,12 +62,12 @@ def rows():
 def test_counts(rows):
     in_405 = [r for r in rows if r['drawings_405']]
     in_393 = [r for r in rows if r['drawings_393']]
-    assert (len(in_405), len(in_393)) == (110, 213)
+    assert (len(in_405), len(in_393)) == (110, 215)
     by_status = {s: [r['cable'] for r in rows if status(r) == s] for s in (BOTH, ONLY_405, ONLY_393)}
     assert len(by_status[BOTH]) == 108
     assert by_status[ONLY_405] == ['M65711', 'M65959']
-    assert len(by_status[ONLY_393]) == 105
-    assert len(rows) == 215
+    assert len(by_status[ONLY_393]) == 107
+    assert len(rows) == 217
 
 
 def test_rows_are_sorted_by_cable_number(rows):
@@ -79,9 +90,9 @@ def test_one_sided_cables_have_blank_other_side(rows):
 
 
 def test_group_diff_on_real_data():
-    """守るもの: 393 実データの28図面（ケーブル数≠0）が、サブタイトル優先で「線番設定表」16図面と
-    「ケーブル一覧表」12図面（`ケ－ブル一覧表` の表記ゆれを含む）の2グループになり、
-    2グループのケーブル製作図ケーブルの和集合が All Diff の393側（213）と一致する。"""
+    """守るもの: 393 実データの29図面（ケーブル数≠0）が、サブタイトル優先で「線番設定表」17図面
+    （637-02E を含む。v3.22.4 で `F` と取れなくなった）と「ケーブル一覧表」12図面（`ケ－ブル一覧表` の表記ゆれを含む）の
+    2グループになり、2グループのケーブル製作図ケーブルの和集合が All Diff の393側（215）と一致する。"""
     from model.cable_compare import compare_groups, read_drawing_titles
     if not os.path.isdir(SAMPLE_ROOT):
         pytest.skip('sample-dxf/ がありません（共有データ置き場のない環境）')
@@ -90,6 +101,6 @@ def test_group_diff_on_real_data():
     xlsx = build_workbook(results)
     map_393 = read_cable_list(io.BytesIO(xlsx), '393')
     groups = compare_groups({}, map_393, read_drawing_titles(io.BytesIO(xlsx), '393'))
-    assert [(g['name'], len(g['drawings'])) for g in groups] == [('ケーブル一覧表', 12), ('線番設定表', 16)]
+    assert [(g['name'], len(g['drawings'])) for g in groups] == [('ケーブル一覧表', 12), ('線番設定表', 17)]
     union = {r['cable'] for g in groups for r in g['rows'] if r['drawings_393']}
-    assert union == set(map_393) and len(union) == 213
+    assert union == set(map_393) and len(union) == 215

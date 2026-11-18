@@ -232,7 +232,9 @@ def test_compare_tab_shows_all_diff_and_group_diff_tabs():
     tab_buttons(at, TAB_COMPARE)[0].click().run()
     assert not at.exception and not at.error
     labels = [t.label for t in at.tabs]
-    assert labels[-3:] == ['All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff']
+    # 位置は 'All Diff' から数える（2026-11-18: 比較タブの後ろに整合性チェックのタブを足したため、末尾からは数えない）
+    start = labels.index('All Diff')
+    assert labels[start:start + 3] == ['All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff']
     assert [df.value.shape[0] for df in at.dataframe] == [2, 1, 2]
     assert at.dataframe[2].value.values.tolist() == [['M05008', '', 'EE0005-339A'], ['M39001', 'EE0001-405A', '']]
 
@@ -455,3 +457,111 @@ def test_preview_shows_view_toggle_only_for_drawing_sheets(tmp_path, mounted):
     assert not at.exception
     assert mounted[-1]['data']['fname'] == 'EE1234-405-01A.dxf' and mounted[-1]['data']['count'] == 2
     assert at.session_state['preview_expanded_405'] is True
+
+
+# ---- 整合性チェック（393）タブ ----
+
+TAB_CHECK = 3
+CHECK_NAME = 'EE6892-365-61C.dxf'
+
+
+def cable_list_dxf_bytes(tmp_path):
+    """ケーブル一覧表だけの合成図面（M39001・M39002）。製作図は同梱しないので 照合1 は NG になる。"""
+    from tests.unit.test_drawing_readers import cable_list_doc
+    doc, _ = cable_list_doc()
+    path = tmp_path / 'list.dxf'
+    doc.saveas(str(path))
+    return path.read_bytes()
+
+
+def run_check_tab(files):
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    uploader = at.file_uploader(key='uploader_check')
+    for name, content in files:
+        uploader.upload(name, content)
+    at.run()
+    return at
+
+
+def check_button(at):
+    return [b for b in at.button if b.key == 'run_check']
+
+
+def test_check_tab_is_the_fourth_tab_with_its_own_uploader():
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert [t.label for t in at.tabs][:4] == [
+        '展開接続図（405）', 'ケーブル製作図（393）', '比較（405と393）', '整合性チェック（393）']
+    assert any('図番形式' in v for v in tab_elements(at, TAB_CHECK, 'info'))
+    assert check_button(at) == []                      # アップロード前はボタンを出さない
+    assert at.file_uploader(key='uploader_check').proto.multiple_files
+
+
+def test_check_tab_ignores_non_target_files_and_warns_about_dwg():
+    at = run_check_tab([('memo.txt', b'x'), ('EE1234-405-01A.dwg', b'x')])
+    assert check_button(at) == []
+    assert any('DWGファイルのため読み込めません' in v for v in tab_elements(at, TAB_CHECK, 'warning'))
+
+
+def test_check_tab_runs_previews_all_sheets_and_offers_download(tmp_path):
+    """守るもの: 実行→プレビュー（Excel と同じ7シート、既定は Summary）→ダウンロード。ボタンは「ケーブル一覧表」の図面だけでも動く。"""
+    at = run_check_tab([(CHECK_NAME, cable_list_dxf_bytes(tmp_path))])
+    (button,) = check_button(at)
+    assert not at.download_button                      # 実行前は結果もダウンロードも無い
+    button.click().run()
+    assert not at.exception and not at.error
+    box = at.selectbox(key='preview_sheet_check')
+    assert box.options == ['Summary', '整合性チェック', 'ケーブル一覧表', '線番設定表', '製作図の接続',
+                           'パターンの解決', '製作図の文字']
+    assert box.value == 'Summary'
+    assert any('1 図面・照合' in v for v in tab_elements(at, TAB_CHECK, 'caption'))
+    box.select('整合性チェック').run()
+    frame = at.dataframe[0].value
+    assert set(frame['ケーブル番号']) == {'M39001', 'M39002'}
+    assert frame[(frame['ケーブル番号'] == 'M39001') & (frame['照合'] == '1 製作図の図面')]['結果'].tolist() == ['NG']
+    assert at.download_button[0].proto.label == '分析結果ダウンロード'
+    types = [c.type for c in at.tabs[TAB_CHECK].children.values()]
+    assert types.index('expander') < types.index('download_button')
+
+
+def test_check_result_disappears_when_input_changes(tmp_path):
+    """守るもの: 入力（ファイル名・サイズ）が変わったら前回の結果を出さない（既存と同じ署名）。"""
+    data = cable_list_dxf_bytes(tmp_path)
+    at = run_check_tab([(CHECK_NAME, data)])
+    check_button(at)[0].click().run()
+    assert at.download_button
+    at.file_uploader(key='uploader_check').upload('EE6892-365-62G.dxf', data)
+    at.run()
+    assert not at.download_button and 'check_result' in at.session_state
+
+
+def test_check_tab_reports_broken_dxf_and_keeps_going(tmp_path):
+    at = run_check_tab([('EE0001-001-01A.dxf', b'not a dxf'), (CHECK_NAME, cable_list_dxf_bytes(tmp_path))])
+    check_button(at)[0].click().run()
+    assert not at.exception
+    assert any('EE0001-001-01A.dxf を処理できませんでした' in e.value for e in at.error)
+    assert at.download_button
+
+
+def test_check_tab_is_independent_of_other_tabs(tmp_path):
+    """守るもの: 整合性タブの実行は他タブの結果・キーに影響せず、他タブの実行も整合性タブに影響しない。"""
+    at = run_check_tab([(CHECK_NAME, cable_list_dxf_bytes(tmp_path))])
+    check_button(at)[0].click().run()
+    assert 'cable_result_405' not in at.session_state and 'cable_result_393' not in at.session_state
+    at.file_uploader(key='uploader_405').upload('EE1234-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))
+    at.run()
+    extract_button(at, TAB_405).click().run()
+    assert at.selectbox(key='preview_sheet_405').value == 'Summary'
+    assert 'check_result' in at.session_state and at.selectbox(key='preview_sheet_check').value == 'Summary'
+
+
+def test_check_tab_warns_about_drawing_without_text(tmp_path):
+    """守るもの: 文字の無い図面は、結果と一緒に警告で名指しする（Summary の件数だけでは気づけない）。"""
+    doc = ezdxf.new('R2010')
+    doc.modelspace().add_line((0, 0), (10, 0))
+    path = tmp_path / 'outline.dxf'
+    doc.saveas(str(path))
+    at = run_check_tab([('EE3298-637-02E.dxf', path.read_bytes()), (CHECK_NAME, cable_list_dxf_bytes(tmp_path))])
+    check_button(at)[0].click().run()
+    assert not at.exception
+    assert any('EE3298-637-02E は文字が無いため読み取れません' in v for v in tab_elements(at, TAB_CHECK, 'warning'))
+    assert at.download_button

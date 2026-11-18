@@ -1,7 +1,7 @@
 """図面 viewer の赤字（ケーブル番号を含む文字）が、抽出結果のケーブルと実データで一致すること。
 
 受入条件:
-  Given sample-dxf/dataset/ME25-7103-0_Cu_R1chamber/ の 405_展開図（23 DXF）と、393_ケーブル のうちケーブルがある図面（28 DXF）
+  Given sample-dxf/dataset/ME25-7103-0_Cu_R1chamber/ の 405_展開図（23 DXF）と、393_ケーブル のうちケーブルがある図面（29 DXF。2026-11-18 に EE3298-637-02E を文字の読める変換版に差し替えて28→29）
   When  render_base_svg() で描き、赤字の対象の文字から find_cables() で番号を集める
   Then  extract_cables() が拾ったケーブル番号の集合と一致する（見える図面に無い番号を赤くしない・拾った番号を赤字から漏らさない）
 
@@ -20,7 +20,7 @@ BASE = os.path.join(PROJECT, 'sample-dxf', 'dataset', 'ME25-7103-0_Cu_R1chamber'
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize('folder, expected_files', [('405_展開図', 23), ('393_ケーブル', 28)])
+@pytest.mark.parametrize('folder, expected_files', [('405_展開図', 23), ('393_ケーブル', 29)])
 def test_highlighted_cables_match_extraction(folder, expected_files):
     files = sorted(glob.glob(os.path.join(BASE, folder, '*.dxf')))
     checked = 0

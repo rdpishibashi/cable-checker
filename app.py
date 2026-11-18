@@ -1,5 +1,5 @@
 """Cable-checker: 展開接続図・ケーブル製作図の DXF からケーブル番号を抽出して Excel に出力し、
-両者の Excel を比較する（View 層）。
+両者の Excel を比較する。393 のケーブル一覧表・線番設定表・ケーブル製作図の整合性もチェックする（View 層）。
 
 処理は model/ に置き、この画面は入力の受け取り・表示・ダウンロードだけを担う。
 入力の種類（405 展開接続図／393 ケーブル製作図）ごとにタブを分け、ウィジェットのキー・
@@ -13,6 +13,10 @@ from model.cable_compare import compare_cables, compare_groups, read_cable_list,
 from model.cable_extractor import (
     dedupe_by_name, extract_from_uploads, is_dwg_filename, is_target_filename,
 )
+from model.consistency import analyze_uploads, check_consistency
+from model.consistency_output import EXCEL_FILENAME as CHECK_FILENAME
+from model.consistency_output import build_workbook as build_check_workbook
+from model.consistency_output import preview_sheets as check_preview_sheets
 from model.compare_output import (
     ALL_SHEET, COMPARE_FILENAME, build_compare_workbook, compare_frame, count_rows, group_sheet_names,
 )
@@ -35,6 +39,8 @@ KINDS = [
 
 COMPARE_TAB = '比較（405と393）'
 COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'groups': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
+CHECK_TAB = '整合性チェック（393）'
+CHECK_RESULT_KEY = 'check_result'  # {'sig': 入力の署名, 'result': check_consistency() の戻り値, 'errors': [...], 'xlsx': bytes}
 
 
 
@@ -68,8 +74,8 @@ def _render_header():
     with st.expander("ℹ️ プログラム説明", expanded=False):
         st.info("\n".join([
             "図番はファイル名から、タイトル・サブタイトルは図面から取得します。",
-            "ケーブル番号は `M`＋数字2桁＋英数字3文字（末尾に英字1文字を許す。"
-            "例: M39001、M06004B、M65A61）です。全角は半角にそろえます。"
+            "ケーブル番号は `M` または `C`＋数字2桁＋英数字3文字（末尾に英字1文字を許す。"
+            "例: M39001、M06004B、M65A61、C10021）です。全角は半角にそろえます。"
             "「W No.」に続く番号は、番号の後ろの文字を「備考」に入れます。"
             "同じ図面内の重複は1つにまとめます。",
             "",
@@ -83,6 +89,9 @@ def _render_header():
             "3. 「比較」タブでは、1・2で出力した2つのExcelファイル（展開接続図とケーブル製作図）を"
             "アップロードし、ケーブル番号ごとに、そのケーブルがある図面の図番を並べて比較します"
             "（片方にしかないケーブルは、もう一方の図番欄が空白になります）",
+            "4. 「整合性チェック」タブでは、ケーブル製作図（393）のDXFをアップロードし、ケーブル一覧表・"
+            "線番設定表・ケーブル製作図の3つについて、ケーブル番号ごとに関連する項目の整合性をチェックします"
+            "（記載している図番も出力。cable_consistency_393.xlsx）",
             "",
             "**Excelファイルの内容：** Summary（図番・タイトル・サブタイトル・ケーブル数。"
             "ケーブル0件の図面も載せる）／ケーブル一覧（図番×ケーブル番号）／"
@@ -260,14 +269,106 @@ def _render_compare_tab():
     _render_compare_viewer()
 
 
+def _check_signature(files):
+    return _signature(files)
+
+
+def _run_check(files):
+    progress = st.progress(0.0, text="準備中...")
+
+    def on_progress(done, total, name):
+        progress.progress(done / total, text=f"読み取り中 ({done + 1}/{total}): {name}")
+
+    drawings, errors = analyze_uploads([(f.name, f.getvalue()) for f in files], progress=on_progress)
+    progress.empty()
+    result = check_consistency(drawings)
+    st.session_state[CHECK_RESULT_KEY] = {
+        'sig': _check_signature(files),
+        'result': result,
+        'errors': errors,
+        'xlsx': build_check_workbook(result),
+    }
+
+
+def _render_check_preview(result):
+    """出力する Excel の中身のプレビュー（シートの組み立ては `preview_sheets()`。ダウンロードする Excel と同じ関数）。"""
+    sheets = dict(check_preview_sheets(result))
+    names = list(sheets)
+    key, open_key = 'preview_sheet_check', 'preview_expanded_check'
+    if st.session_state.get(key) not in names:
+        st.session_state.pop(key, None)
+
+    def mark_expanded():
+        st.session_state[open_key] = True
+
+    with st.expander("分析結果プレビュー", expanded=st.session_state.get(open_key, False)):
+        sheet = st.selectbox("シートを選択", names, key=key, on_change=mark_expanded,
+                             width=sheet_select_width(names))
+        widths, table_width = column_widths(sheets[sheet])
+        column_config = {col: st.column_config.Column(width=px) for col, px in widths.items()}
+        st.dataframe(sheets[sheet], width=table_width, hide_index=True, column_config=column_config,
+                     key='preview_table_check')
+
+
+def _render_check_result(state):
+    for name, message in state['errors']:
+        st.error(f"{name} を処理できませんでした: {message}")
+    result = state['result']
+    for d in result['drawings']:
+        if d['no_text']:
+            st.warning(f"{d['drawing_number']} は文字が無いため読み取れません（文字が線に分解されている可能性があります。"
+                       "元のDWGから文字を残してDXFに変換し直してください）。")
+    checks = result['checks']
+    n_ng = sum(c['結果'] == 'NG' for c in checks)
+    st.subheader("チェック結果")
+    st.caption(f"{len(result['drawings'])} 図面・照合 {len(checks)} 件（NG {n_ng} 件）")
+    _render_check_preview(result)
+    st.download_button(
+        "分析結果ダウンロード", data=state['xlsx'], file_name=CHECK_FILENAME,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary", key='download_check',
+    )
+
+
+def _render_check_tab():
+    st.write(
+        "ケーブル製作図（393）のDXFをまとめてアップロードします。ケーブル一覧表・線番設定表・"
+        "ケーブル製作図を図面の内容から見分け、ケーブル番号ごとに関連する項目の整合性をチェックします"
+        "（他のタブとは独立。393のDXFはここでもう一度アップロードします）。"
+    )
+    uploaded = st.file_uploader("ケーブル製作図（393。複数可，フォルダ可）", accept_multiple_files=True,
+                                key='uploader_check')
+    files, ignored, skipped, dwg = _target_files(uploaded or [])
+
+    if uploaded:
+        st.caption(f"処理対象 {len(files)} 件（図番形式でないファイル {ignored} 件は無視）")
+    for name in skipped:
+        st.warning(f"{name} は同名のファイルが先にあるためスキップしました。")
+    for name in dwg:
+        st.warning(f"{name} はDWGファイルのため読み込めません。DXFに変換してアップロードしてください。")
+
+    if not files:
+        st.info("図番形式（例: EE6892-365-61C.dxf）のDXFファイルをアップロードしてください。")
+        return
+
+    if st.button("整合性をチェック", type="primary", key='run_check'):
+        _run_check(files)
+
+    state = st.session_state.get(CHECK_RESULT_KEY)
+    if state and state['sig'] == _check_signature(files):
+        _render_check_result(state)
+
+
 def main():
     _render_header()
-    tabs = st.tabs([k[1] for k in KINDS] + [COMPARE_TAB])
+    tabs = st.tabs([k[1] for k in KINDS] + [COMPARE_TAB, CHECK_TAB])
     for tab, (kind, _, drawing_name, hint) in zip(tabs, KINDS):
         with tab:
             _render_tab(kind, drawing_name, hint)
-    with tabs[-1]:
+    with tabs[-2]:
         _render_compare_tab()
+    with tabs[-1]:
+        _render_check_tab()
 
 
 main()

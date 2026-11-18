@@ -49,7 +49,9 @@ def test_preview_sheets_match_workbook_sheets_and_cells():
     book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None, keep_default_na=False)
     assert list(book) == [n for n, _ in sheets]
     for name, frame in sheets:
-        assert book[name].astype(str).values.tolist() == frame.astype(str).values.tolist(), name
+        # 欠損（空欄）は Excel から読むと空文字。Int64 の欠損は <NA> と出るので、空文字にそろえて比べる
+        shown = frame.astype(object).where(frame.notna(), '')
+        assert book[name].astype(str).values.tolist() == shown.astype(str).values.tolist(), name
         assert list(book[name].columns) == list(frame.columns)
 
 
@@ -100,3 +102,21 @@ def test_empty_result_still_builds_all_sheets():
     result = check_consistency([])
     book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None)
     assert list(book) == SHEET_NAMES
+
+
+def test_every_preview_sheet_converts_to_arrow():
+    """守るもの: 画面の表（st.dataframe）は Arrow に変換される。数値と空文字が混ざる列は変換に失敗して警告が出る
+    （2026-11-18、Summary の件数列と、線番設定表にだけあるケーブルを含む整合性チェックシートの「一覧表の行」列）。"""
+    import pyarrow as pa
+    for name, frame in preview_sheets(make_result()):
+        pa.Table.from_pandas(frame, preserve_index=False)   # 失敗したら例外
+
+
+def test_blank_cells_stay_blank_in_excel_and_numbers_stay_numbers():
+    result = make_result()
+    book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None, keep_default_na=False)
+    summary = book['Summary'].set_index('項目')
+    assert summary.loc['図面: 全体', '件数'] == 3 and summary.loc['図面: 全体', 'OK'] == ''
+    check = book['整合性チェック']
+    wire_only = check[check['ケーブル番号'] == 'M99999']
+    assert wire_only['一覧表の行'].tolist() == [''] and check[check['ケーブル番号'] == 'M65206']['一覧表の行'].tolist()[0] == 1

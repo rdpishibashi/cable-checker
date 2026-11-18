@@ -3,6 +3,8 @@
 - シート選択の selectbox は最長のシート名に合わせた幅にする（既定の全幅だと長すぎてメニューと認識されない）。
 - 表の各列はデータの長さに合わせる（Excel出力と同じ表示幅の数え方。全角=2）。
 """
+import pandas as pd
+
 from model.excel_output import display_width
 
 PX_PER_CHAR = 8    # 表の列幅 px = 表示幅（全角=2）×8 + 余白
@@ -24,6 +26,6 @@ def column_widths(df):
     """プレビュー表の列幅 `({列名: px}, 表の幅px)`。各列はヘッダーと値の最長に合わせる（最大 60 文字分）。"""
     widths = {}
     for col in df.columns:
-        chars = max([display_width(str(col))] + [display_width(str(v)) for v in df[col]])
+        chars = max([display_width(str(col))] + [display_width('' if pd.isna(v) else str(v)) for v in df[col]])
         widths[col] = chars_to_px(min(chars, MAX_COLUMN_CHARS))
     return widths, sum(widths.values())

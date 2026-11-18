@@ -37,6 +37,11 @@ CONN_COLUMNS = ['図番', '端の数',
 RESULT_COLORS = {OK: ('#EAF7EC', '#006100'), NG: ('#FEF1F5', '#9C0006')}
 
 
+def _cell_text(value):
+    """列幅の計算用。欠損（空欄）は空文字（`str(pd.NA)` の `<NA>` を数えない）。"""
+    return '' if pd.isna(value) else str(value)
+
+
 def summary_frame(result):
     rows = []
     for name in CHECK_NAMES:
@@ -53,12 +58,17 @@ def summary_frame(result):
         ('図面: 文字の無い図面', sum(d['no_text'] for d in drawings)),
         ('図面: 全体', len(drawings)),
     ]
-    rows += [[name, '', '', '', n] for name, n in kinds]
-    return pd.DataFrame(rows, columns=SUMMARY_COLUMNS)
+    rows += [[name, None, None, None, n] for name, n in kinds]
+    # 図面の種類の行は結果の列が空欄（None）。数値と空文字が混ざる object 列にすると、Streamlit の表（Arrow）に変換できないので
+    # 欠損を許す整数型にそろえる（Excel では空欄、表では数値のまま並べ替えられる）
+    return pd.DataFrame(rows, columns=SUMMARY_COLUMNS).astype({c: 'Int64' for c in SUMMARY_COLUMNS[1:]})
 
 
 def check_frame(result):
-    return pd.DataFrame([[c[k] for k in CHECK_COLUMNS] for c in result['checks']], columns=CHECK_COLUMNS)
+    frame = pd.DataFrame([[c[k] for k in CHECK_COLUMNS] for c in result['checks']], columns=CHECK_COLUMNS)
+    # 線番設定表にだけあるケーブルの行は一覧表の行が空（''）。数値と混ざる object 列は Arrow に変換できないので整数型にそろえる
+    frame['一覧表の行'] = frame['一覧表の行'].replace('', None).astype('Int64')
+    return frame
 
 
 def list_frame(result):
@@ -140,14 +150,14 @@ def build_workbook(result):
             ws = writer.sheets[name]
             for col, column in enumerate(frame.columns):
                 ws.write(0, col, column, header_fmt)
-                width = max([display_width(str(column))] + [display_width(str(v)) for v in frame[column]]) + 2
+                width = max([display_width(str(column))] + [display_width(_cell_text(v)) for v in frame[column]]) + 2
                 ws.set_column(col, col, min(width, 60))
             if name == CHECK_SHEET:
                 result_col = list(frame.columns).index('結果')
                 for i, values in enumerate(frame.values.tolist(), start=1):
                     fmt = row_fmts.get(values[result_col])
                     for col, value in enumerate(values):
-                        ws.write(i, col, value, fmt)
+                        ws.write(i, col, None if pd.isna(value) else value, fmt)   # 欠損は空欄（書式だけ付ける）
             ws.freeze_panes(1, 1)
             if len(frame):
                 ws.autofilter(0, 0, len(frame), len(frame.columns) - 1)

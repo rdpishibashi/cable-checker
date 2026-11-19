@@ -40,7 +40,7 @@ import os
 import pandas as pd
 import pytest
 
-from model.consistency import ITEM_COLUMNS, SYMBOLS, analyze_drawing, analyze_uploads, check_consistency, pattern_resolutions
+from model.consistency import ITEM_COLUMNS, SYMBOLS, analyze_drawing, pattern_resolutions, run_check
 from model.consistency_output import build_workbook, preview_sheets
 
 pytestmark = pytest.mark.slow
@@ -89,19 +89,20 @@ def drawings():
 
 
 @pytest.fixture(scope='module')
-def uploaded():
-    """393（106件）と 405（23件）を一緒にアップロードしたときの図面の dict（`analyze_uploads()`。2段で読む）。"""
-    paths = (sorted(glob.glob(os.path.join(DATA_DIR, '*.dxf'))) + sorted(glob.glob(os.path.join(DATA_405_DIR, '*.dxf'))))
-    assert len(paths) == 129
-    items = [(os.path.basename(p), open(p, 'rb').read()) for p in paths]
-    drawings, errors = analyze_uploads(items)
+def result():
+    """393（106件）と 405（23件）を別のセットとしてアップロードしたときの結果（`run_check()`。抽出・2段の読み取り・照合・比較）。"""
+    def items(folder):
+        return [(os.path.basename(p), open(p, 'rb').read()) for p in sorted(glob.glob(os.path.join(folder, '*.dxf')))]
+    items_405, items_393 = items(DATA_405_DIR), items(DATA_DIR)
+    assert (len(items_405), len(items_393)) == (23, 106)
+    result, errors = run_check(items_405, items_393)
     assert errors == []
-    return drawings
+    return result
 
 
 @pytest.fixture(scope='module')
-def result(uploaded):
-    return check_consistency(uploaded)
+def uploaded(result):
+    return result['drawings']
 
 
 def by_name(drawings, name):
@@ -146,6 +147,15 @@ def test_note_patterns_resolve_as_in_the_feasibility_study(drawings):
     assert all(r['件数'] == 1 for r in res if (r['図面種別'], r['参照元図面種別']) == ('製作図', '線番設定表の注記'))   # 17枚すべて1件
     assert {(r['図面種別'], r['参照元図面種別']) for r in res} == {
         ('製作図', '一覧表'), ('展開接続図', '一覧表'), ('線番設定表', '製作図の注記'), ('製作図', '線番設定表の注記')}   # 2段目の前なので図中の参照は無い
+
+
+def test_schematic_patterns_are_resolved_in_the_405_set_only(uploaded):
+    """守るもの: 一覧表の接続図パターンは 405 のセットだけで解決する。`EE****-634-**`・`-637-**`・`-639-**` は 393 のセットの線番設定表・製作図
+    （EE3298-634-07E・637-02E/03R/50C・639-02G/42B/43L）にも名前が合うが、当たるのは展開接続図 1件ずつ（以前は 2・4・4 件）。"""
+    rows = {r['パターン']: r for r in pattern_resolutions(uploaded) if (r['図面種別'], r['参照元図面種別']) == ('展開接続図', '一覧表')}
+    assert {p: rows[p]['当たった図面'] for p in ('EE****-634-**', 'EE****-637-**', 'EE****-639-**')} == {
+        'EE****-634-**': 'EE6892-634-01C', 'EE****-637-**': 'EE6888-637-01A', 'EE****-639-**': 'EE6888-639-01A'}
+    assert all(r['件数'] <= 1 for r in rows.values())
 
 
 def test_references_written_in_schematics_are_listed_in_the_pattern_sheet(uploaded):

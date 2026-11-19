@@ -146,6 +146,19 @@ def test_note_patterns_resolve_as_in_the_feasibility_study(drawings):
     assert all(r['件数'] == 1 for r in res if r['種別'] == '製作図（線番設定表の注記）')   # 17枚すべて1件
 
 
+def test_references_written_in_schematics_are_listed_in_the_pattern_sheet(uploaded):
+    """展開接続図の図中の `to POWER LINE (SYSTEM I/F BOX) (-405-08)` などの参照を、パターンの解決に24行（参照元の図面×パターン）足す。
+    実データでは 17 ファイル中、2段目で読んだ 14 枚から出て（EE6886-699-01A・EE6892-405-17A・EE6892-514-01B は読まない）、`-405-08` は EE6892-405-08A に当たる（9枚）。アップロードに無い図面は0件。
+    照合の記号は変えず、参照で指されただけの図面は「使っていない図面」のまま（EE6892-405-17A 等）。"""
+    rows = [r for r in pattern_resolutions(uploaded) if r['種別'] == '展開接続図（図中の参照）']
+    assert len(rows) == 24
+    hits = [r for r in rows if r['件数'] == 1]
+    assert len(hits) == 9 and {(r['パターン'], r['当たった図面']) for r in hits} == {('-405-08', 'EE6892-405-08A')}
+    assert all(r['件数'] == 0 for r in rows if r['パターン'] != '-405-08')
+    row600 = next(r for r in rows if r['参照元の図番'] == 'EE6892-600-01A')
+    assert row600['備考'].count('XRLS') == 2                      # `to` で始まらない参照（`(-405-08) XRLS1`）も拾い、同じパターンは1行にまとめる
+
+
 def test_no_drawing_lacks_text_and_637_02e_is_a_wire_number_table(drawings):
     """637-02E は文字の読める変換版（2026-11-18 差し替え）。旧版は文字が輪郭線で「文字の無い図面」だった。"""
     assert [d['drawing_number'] for d in drawings if d['no_text']] == []
@@ -252,7 +265,7 @@ def test_excel_matches_preview_and_has_all_rows(result):
     sheets = dict(preview_sheets(result))
     assert {k: len(v) for k, v in sheets.items()} == {
         'Summary': 24, '整合性チェック': 228, '照合明細': 4144, '芯線の照合': 1101, 'ケーブル一覧表': 134, '線番設定表': 403,
-        '製作図の接続': 456, '展開接続図': 628, 'パターンの解決': 149, '製作図の文字': 3852}
+        '製作図の接続': 456, '展開接続図': 628, 'パターンの解決': 173, '製作図の文字': 3852}
     wb = build_workbook(result)
     book = pd.read_excel(io.BytesIO(wb), sheet_name=None, keep_default_na=False)
     assert list(book) == list(sheets)

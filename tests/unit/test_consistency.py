@@ -645,6 +645,39 @@ def test_pattern_resolutions_include_the_schematic_patterns():
     assert hit['パターン'] == 'EE****-610-**' and hit['当たった図面'] == SCH_NAME and hit['件数'] == 1
 
 
+REF = '展開接続図（図中の参照）'
+REF_TARGET = 'EE6892-405-08A'
+
+
+def test_pattern_resolutions_include_references_written_in_the_schematic():
+    """展開接続図の図中の `(-405-08)` は、パターンの解決に行として足す（頭の英字2・数字4と末尾の改訂記号は任意。備考に参照元の文字）。"""
+    ds = with_schematic(build())
+    by_name(ds, SCH_NAME)['schematic']['refs'] = [
+        {'pattern': '-405-08', 'text': 'to POWER LINE (-405-08)'}, {'pattern': '-405-08', 'text': 'XRLS1 (-405-08)'},
+        {'pattern': '-300-01', 'text': 'DO21-24 (-300-01 1/2)'}]
+    ds.append(drawing(REF_TARGET))
+    rows = {r['パターン']: r for r in C.pattern_resolutions(ds) if r['種別'] == REF}
+    assert list(rows) == ['-405-08', '-300-01']                   # 同じパターンは1行（備考に参照元の文字をまとめる）
+    hit = rows['-405-08']
+    assert (hit['参照元の図番'], hit['当たった図面'], hit['件数']) == (SCH_NAME, REF_TARGET, 1)
+    assert hit['備考'] == 'to POWER LINE (-405-08) ／ XRLS1 (-405-08)'
+    miss = rows['-300-01']
+    assert (miss['当たった図面'], miss['件数'], miss['備考']) == ('', 0, 'DO21-24 (-300-01 1/2)')
+
+
+def test_references_are_read_only_from_schematics_and_do_not_change_the_check():
+    """図中の参照は展開接続図（2段目で読んだ図面）だけから拾い、照合の記号・不整合数・「使っていない図面」は変えない。"""
+    plain = with_schematic(build())
+    ds = copy.deepcopy(plain)
+    by_name(ds, SCH_NAME)['schematic']['refs'] = [{'pattern': '-405-08', 'text': 'to X (-405-08)'}]
+    ds.append(drawing(REF_TARGET))
+    plain.append(drawing(REF_TARGET))
+    assert not [r for r in C.pattern_resolutions(plain) if r['種別'] == REF]    # refs が無い・読んでいない図面からは出ない
+    a, b = check_consistency(plain), check_consistency(ds)
+    assert (a['rows'], a['details'], a['wires']) == (b['rows'], b['details'], b['wires'])
+    assert a['unused'] == b['unused'] == [REF_TARGET]            # 参照で指されただけの図面は「使っていない」のまま
+
+
 def test_schematic_targets_are_only_drawings_pointed_at_by_the_list(monkeypatch):
     ds = with_schematic(build())
     ds.append(drawing('EE7777-700-01A'))

@@ -967,12 +967,37 @@ def _end_info(g, grid, device_rects, regions, E, term, inner):
             'regions': names, 'devices': devices, 'nearby': nearby}
 
 
+# 図中の参照: 「to POWER LINE (SYSTEM I/F BOX) (-405-08)」のように、括弧の中の `-英数字3-英数字2` が参照先の図番（の一部）を示す。
+# 括弧の中はその後ろに任意の文字が続いてよい（`(-405-05 3/4)` のシート番号、`(-405-01,02)` の複数）。
+_REF_RE = re.compile(r'\(\s*(-[0-9A-Z]{3}-[0-9A-Z]{2})([^()]*)\)')
+
+
+def find_references(texts):
+    """図中の文字から、他の図面への参照 `(-xxx-xx…)` を拾う。
+
+    Args:
+        texts: 文字列のリスト（改行・全角は問わない。NFKC で正規化して見る）。
+    Returns:
+        [{'pattern': '-405-08', 'text': 参照を含む文字（空白を1つに詰めたもの）}, ...]（文字の出現順、(pattern, text) の重複は除く）。
+    """
+    out, seen = [], set()
+    for raw in texts:
+        text = re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', raw or '')).strip()
+        for m in _REF_RE.finditer(text.upper()):
+            key = (m.group(1), text)
+            if key not in seen:
+                seen.add(key)
+                out.append({'pattern': m.group(1), 'text': text})
+    return out
+
+
 def analyze_schematic(path, name):
     """1枚の展開接続図を読み、ケーブル番号の出現ごとの芯線と両端の事実を返す。
 
     Returns:
         {'title': タイトル, 'error': 読めなかった理由（無ければ ''）, 'no_text': 文字が1つも無い,
          'region_error': 領域抽出の失敗理由（無ければ ''）,
+         'refs': [{'pattern': '-405-08', 'text': 'to POWER LINE (-405-08)'}]（図中の「(-xxx-xx…)」＝他の図面への参照）,
          'occurrences': [{'cable', 'remark', 'how', 'wires': [{'labels': [...], 'ends': {'-': END, '+': END}}]}]}
         `how`: ellipse（楕円）・capsule（長円）・via-line（シールドや円筒の側面の線経由）・single（1本の線）・
         beside（引出線なしで円筒の横に置いたラベル）・none（引出線が見つからない）。
@@ -980,7 +1005,7 @@ def analyze_schematic(path, name):
         END: {'kind': 'box'|'circle'|'gnd'|None, 'name', 'pin', 'regions', 'devices', 'nearby'}。
         `nearby` は [(文字の1行目, 距離, 文字の全体), ...]（機器符号のラベルから NEAR_LABEL_DIST 以内。近い順）。
     """
-    out = {'title': '', 'error': '', 'no_text': False, 'region_error': '', 'occurrences': []}
+    out = {'title': '', 'error': '', 'no_text': False, 'region_error': '', 'refs': [], 'occurrences': []}
     g, _doc = load(path)
     if g.error:
         out['error'] = g.error
@@ -992,6 +1017,7 @@ def analyze_schematic(path, name):
     if not g.txts:
         out['no_text'] = True
         return out
+    out['refs'] = find_references([t.s for t in g.txts])
     try:
         analysis = analyze_dxf_regions(path, REGION_CFG)
         regions = list(analysis.get('regions', [])) + list(analysis.get('minor_regions', []))

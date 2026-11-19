@@ -270,3 +270,41 @@ def test_invisible_cable_label_is_ignored(tmp_path):
             e.dxf.invisible = 1
     doc.saveas(path)
     assert read(path)['occurrences'] == []
+
+
+# ---------------------------------------------------------------- 図中の参照 (-xxx-xx…)
+
+@pytest.mark.parametrize('text, patterns', [
+    ('to POWER LINE (SYSTEM I/F BOX) (-405-08)', ['-405-08']),
+    ('XRLS1 (-405-08)', ['-405-08']),
+    ('(-405-08) XRLS2', ['-405-08']),
+    ('DO21-24 (-300-01 1/2)', ['-300-01']),                       # 後ろにシート番号
+    ('to POWER LINE (CB BOX C1) (-405-05 3/4)', ['-405-05']),
+    ('Refer to POWER LINE        (-405-01,02) NOTE2', ['-405-01']),  # 後ろに複数指定
+    ('to DEVICENET    (-405-21)', ['-405-21']),                      # 空白が並んでいてもよい
+    ('（-405-08）', ['-405-08']),                                    # 全角括弧
+    ('(-ab1-2c)', ['-AB1-2C']),                                     # 英数字（小文字は大文字に）
+    ('( -405-08 )', ['-405-08']),                                   # 括弧の内側の空白
+    ('to A (-405-08) and B (-405-09)', ['-405-08', '-405-09']),     # 1つの文字に複数
+    ('(SYSTEM I/F BOX)', []),                                       # 括弧だけ
+    ('(-405-0)', []),                                               # 桁が足りない
+    ('(-4050-08)', []),                                             # 桁が多い
+    ('405-08', []),                                                 # 括弧なし
+    ('(405-08)', []),                                               # 先頭の - が無い
+    ('(-405-08', []),                                               # 閉じていない
+    ('', []),
+])
+def test_find_references_picks_the_drawing_number_part_in_parentheses(text, patterns):
+    assert [r['pattern'] for r in sr.find_references([text])] == patterns
+
+
+def test_find_references_keeps_the_source_text_and_drops_duplicates():
+    refs = sr.find_references(['to POWER LINE\n(-405-08)', 'to POWER LINE (-405-08)', 'XRLS1 (-405-08)'])
+    assert refs == [{'pattern': '-405-08', 'text': 'to POWER LINE (-405-08)'},
+                    {'pattern': '-405-08', 'text': 'XRLS1 (-405-08)'}]
+
+
+def test_analyze_schematic_returns_references_found_in_the_drawing(tmp_path):
+    path = build(tmp_path, extras=lambda msp: _text(msp, 'to POWER LINE (SYSTEM I/F BOX) (-405-08)', 30, 40))
+    assert read(path)['refs'] == [{'pattern': '-405-08', 'text': 'to POWER LINE (SYSTEM I/F BOX) (-405-08)'}]
+    assert read(build(tmp_path, name='EE0000-405-02A'))['refs'] == []

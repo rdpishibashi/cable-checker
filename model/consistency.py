@@ -41,6 +41,7 @@ KIND_LIST = 'ケーブル一覧表'
 KIND_WIRE = '線番設定表'
 KIND_FAB = 'ケーブル製作図'
 KIND_SCHEMATIC = '展開接続図'
+KIND_REF = '展開接続図（図中の参照）'  # パターンの解決シートの種別
 
 PHASE_DRAWINGS = '図面の読み取り'
 PHASE_SCHEMATIC = '展開接続図の読み取り'
@@ -1134,7 +1135,8 @@ def check_consistency(drawings):
         rows.append(out)
 
     # 照合に使っていない図面: 393 の種類が無く、どのパターンにも当たらない
-    hit = {name for r in pattern_resolutions(drawings) for name in r['当たった図面'].split('、') if name}
+    # 図中の参照（KIND_REF_IN_SCHEMATIC）で指されただけの図面は、照合には使っていないので「使っていない図面」のまま
+    hit = {name for r in pattern_resolutions(drawings) if r['種別'] != KIND_REF for name in r['当たった図面'].split('、') if name}
     unused = [d['drawing_number'] for d in sorted(drawings, key=lambda d: d['drawing_number'])
               if not d['kinds'] and d['drawing_number'] not in hit]
     return {'rows': rows, 'details': details, 'wires': wires, 'drawings': drawings, 'unused': unused}
@@ -1146,18 +1148,19 @@ def pattern_resolutions(drawings):
     """図面パターンの解決結果。どのパターンが、どの図面に、何件当たったか（照合 1・3・5 の根拠）。
 
     Returns: [{'種別', 'パターン', '参照元の図番', '当たった図面', '件数', '備考'}, ...]
-        種別: 製作図（一覧表・線番設定表の注記が指す）／線番設定表（製作図の注記が指す）／展開接続図（一覧表の接続図パターンが指す）。
+        種別: 製作図（一覧表・線番設定表の注記が指す）／線番設定表（製作図の注記が指す）／展開接続図（一覧表の接続図パターンが指す）／
+        展開接続図（図中の参照: 展開接続図の `to … (-405-08)` のような文字が指す。備考に参照元の文字。照合には使わない）。
     """
     by_name = {d['drawing_number']: d for d in drawings}
     out, seen = [], set()
 
-    def add(kind, pattern, make_regex, source):
+    def add(kind, pattern, make_regex, source, remark=''):
         hits = _resolve(make_regex(pattern), by_name)
         key = (kind, pattern, source)
         if key in seen:
             return
         seen.add(key)
-        note = '文字が無い図面' if any(h['no_text'] for h in hits) else ''
+        note = ' ／ '.join(x for x in (remark, '文字が無い図面' if any(h['no_text'] for h in hits) else '') if x)
         out.append({'種別': kind, 'パターン': pattern, '参照元の図番': source,
                     '当たった図面': '、'.join(h['drawing_number'] for h in hits), '件数': len(hits), '備考': note})
     for d in sorted(drawings, key=lambda d: d['drawing_number']):
@@ -1171,6 +1174,11 @@ def pattern_resolutions(drawings):
             add('線番設定表（製作図の注記）', p, wire_pattern_regex, src)
         for p in d['wire_notes']:
             add('製作図（線番設定表の注記）', p, fab_pattern_regex, src)
+        refs = {}
+        for ref in (d.get('schematic') or {}).get('refs', []):
+            refs.setdefault(ref['pattern'], []).append(ref['text'])
+        for p, texts in refs.items():
+            add(KIND_REF, p, wire_pattern_regex, src, remark=' ／ '.join(texts))
     return out
 
 

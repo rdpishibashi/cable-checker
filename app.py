@@ -1,51 +1,27 @@
-"""Cable-checker: 展開接続図・ケーブル製作図の DXF からケーブル番号を抽出して Excel に出力し、
-両者の Excel を比較する。393 のケーブル一覧表・線番設定表・ケーブル製作図と、展開接続図（405）の整合性もチェックする（View 層）。
+"""Cable-checker: 展開接続図（405）とケーブル製作図（393）の DXF から、ケーブル番号の抽出・比較と、
+ケーブル一覧表・線番設定表・ケーブル製作図・展開接続図の整合性チェックを1回で行う（View 層）。
 
 処理は model/ に置き、この画面は入力の受け取り・表示・ダウンロードだけを担う。
-入力の種類（405 展開接続図／393 ケーブル製作図）ごとにタブを分け、ウィジェットのキー・
-セッションのキーも種類ごとに別にする（片方の操作が他方の結果に影響しない）。
+画面は1つ（タブなし）。405 と 393 のアップローダーを左右に並べ、「整合性をチェック」で結果（分析結果プレビュー・Excel）を出す。
 """
 import os
 
 import streamlit as st
 
-from model.cable_compare import compare_cables, compare_groups, read_cable_list, read_drawing_titles
-from model.cable_extractor import (
-    dedupe_by_name, extract_from_uploads, is_dwg_filename, is_target_filename,
-)
-from model.consistency import analyze_uploads, check_consistency
+from model.cable_extractor import dedupe_by_name, is_dwg_filename, is_target_filename
+from model.consistency import KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, SET_393, SET_405, run_check
 from model.consistency_output import EXCEL_FILENAME as CHECK_FILENAME
 from model.consistency_output import build_workbook as build_check_workbook
 from model.consistency_output import preview_sheets as check_preview_sheets
-from model.compare_output import (
-    ALL_SHEET, COMPARE_FILENAME, build_compare_workbook, compare_frame, count_rows, group_sheet_names,
-)
-from model.excel_output import (
-    EXCEL_FILENAMES, build_workbook, preview_sheets,
-)
 from view import cable_viewer
 from view.preview_layout import column_widths, sheet_select_width
 
-st.set_page_config(page_title="Cable-checker - 展開図-ケーブル図 ケーブル番号比較", page_icon="🔌", layout="wide")
+st.set_page_config(page_title="Cable-checker", page_icon="🔌", layout="wide")
 
-# (種類ID, タブ名, 図面の呼び名, 説明に足す一文)
-KINDS = [
-    ('405', '展開接続図（405）', '展開接続図',
-     "ケーブル番号は図面内の「W No.M39001」形式のラベルから拾います。"),
-    ('393', 'ケーブル製作図（393）', 'ケーブル製作図',
-     "ケーブル番号が記載されている図面を調べ、その全体と図面種別ごとのケーブル番号を比較します。"),
-]
-
-
-COMPARE_TAB = '比較（405と393）'
-COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'groups': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
-CHECK_TAB = '整合性チェック'
-CHECK_RESULT_KEY = 'check_result'  # {'sig': 入力の署名, 'result': check_consistency() の戻り値, 'errors': [...], 'xlsx': bytes}
-
-
-
-def _result_key(kind):
-    return f'cable_result_{kind}'  # {'sig': 入力の署名, 'results': [...], 'errors': [...], 'xlsx': bytes}
+CHECK_RESULT_KEY = 'check_result'  # {'sig': 入力の署名（405 の署名, 393 の署名）, 'result': run_check() の結果, 'errors': [...], 'xlsx': bytes}
+SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル製作図（393）'}
+SPINNER_TEXT = "図面を読み取っています…（図面の数によっては数十秒かかります）"
+SECTION_STATUS_TEXT = "結果をまとめています…"
 
 
 def _target_files(uploaded):
@@ -61,87 +37,97 @@ def _target_files(uploaded):
     return [targets[i] for i in keep], ignored, skipped, dwg
 
 
+def _stem(name):
+    return os.path.splitext(name)[0]
+
+
+def _drop_names_of(files, other):
+    """`files` のうち、`other` と同じ名前（拡張子・大小文字無視）のものを除く。Returns: (残り, 除いた名前)"""
+    taken = {_stem(f.name).lower() for f in other}
+    kept = [f for f in files if _stem(f.name).lower() not in taken]
+    return kept, [f.name for f in files if _stem(f.name).lower() in taken]
+
+
 def _signature(files):
     return tuple((f.name, f.size) for f in files)
 
 
 def _render_header():
-    st.title("Cable-checker - 展開図-ケーブル図 ケーブル番号比較")
+    st.title("Cable-checker - 展開接続図・ケーブル製作図の整合性チェック")
     st.write(
-        "展開接続図またはケーブル製作図のDXFファイルから、図番ごとのケーブル番号"
-        "（`M39001` など）を抽出し、Excelに出力します。"
+        "展開接続図（405）とケーブル製作図（393）のDXFファイルをアップロードし、ケーブル番号の抽出・比較と、"
+        "ケーブル一覧表・線番設定表・ケーブル製作図・展開接続図の整合性チェックを行います。"
     )
     with st.expander("ℹ️ プログラム説明", expanded=False):
         st.info("\n".join([
-            "図番はファイル名から、タイトル・サブタイトルは図面から取得します。",
-            "ケーブル番号は `M` または `C`＋数字2桁＋英数字3文字（末尾に英字1文字を許す。"
-            "例: M39001、M06004B、M65A61、C10021）です。全角は半角にそろえます。"
-            "「W No.」に続く番号は、番号の後ろの文字を「備考」に入れます。"
-            "同じ図面内の重複は1つにまとめます。",
-            "",
             "**使用手順：**",
-            "1. 入力する図面の種類のタブを選び、DXFファイルをアップロードします（複数可・フォルダ可。"
-            "図番の形式でないファイルは無視されます。DWGファイルは読み込めないので、"
-            "DXFに変換してください）",
-            "2. 「ケーブルを抽出」ボタンを押し、結果をExcelでダウンロードします"
-            "（展開接続図は cable_list_405.xlsx、ケーブル製作図は cable_list_393.xlsx）",
+            "1. 展開接続図（405）とケーブル製作図（393）のDXFファイルを、それぞれのアップロード欄にアップロードします"
+            "（複数可・フォルダ可。図番の形式でないファイルは無視されます。DWGファイルは読み込めないので、"
+            "DXFに変換してください。両方に同じ名前のファイルがあるときは、展開接続図の側を使います）。"
+            "どちらか片方だけでも実行できます",
+            "2. 「整合性をチェック」ボタンを押し、結果を「分析結果プレビュー」で確認して、Excelをダウンロードします"
+            "（cable_consistency.xlsx）",
             "",
-            "3. 「比較」タブでは、1・2で出力した2つのExcelファイル（展開接続図とケーブル製作図）を"
-            "アップロードし、ケーブル番号ごとに、そのケーブルがある図面の図番を並べて比較します"
-            "（片方にしかないケーブルは、もう一方の図番欄が空白になります）",
-            "4. 「整合性チェック」タブでは、ケーブル製作図（393）と展開接続図（405）のDXFをまとめてアップロードし、"
-            "ケーブル一覧表の1行ごとに、一覧表・線番設定表・ケーブル製作図・展開接続図の整合性をチェックします。"
-            "393 の図面は内容から見分け、一覧表の「接続図図面番号」が指す図面を展開接続図として読みます"
-            "（cable_consistency.xlsx。各項目の判定は ○一致・△一致（根拠が弱い）・×不整合・？読めない・－対象外 の記号で、"
-            "根拠は「照合明細」シートに出ます）",
+            "**チェックの内容：** ケーブル一覧表の1行ごとに、図面の対応・端末（ユニット・モジュール・機器符号・部品種別）・"
+            "ケーブル（種類・芯数）・芯線（線番・PIN・色）を照合します。393 の図面（ケーブル一覧表・線番設定表・ケーブル製作図）は"
+            "内容から見分け、一覧表の「接続図図面番号」が指す展開接続図を読んで照合します。"
+            "各項目の判定は ○一致・△一致（根拠が弱い）・×不整合・？読めない・－対象外 の記号で、根拠は「照合明細」シートに出ます。",
             "",
-            "**Excelファイルの内容：** Summary（図番・タイトル・サブタイトル・ケーブル数。"
-            "ケーブル0件の図面も載せる）／ケーブル一覧（図番×ケーブル番号）／"
-            "図番ごとのシート（ケーブルがある図面だけ）",
+            "**ケーブル番号：** `M` または `C`＋数字2桁＋英数字3文字（末尾に英字1文字を許す。例: M39001、M06004B、M65A61、C10021）。"
+            "全角は半角にそろえます。「W No.」に続く番号は、番号の後ろの文字を「備考」に入れます。同じ図面内の重複は1つにまとめます。"
+            "展開接続図と製作図のケーブル番号は「All Diff」シート（と、製作図のタイトル別の「…Diff」シート）で突き合わせます。",
+            "",
+            "**Excelファイルの内容：** Summary／整合性チェック／照合明細／芯線の照合／All Diff・各グループの Diff／"
+            "図面一覧／ケーブル抽出／ケーブル一覧表／線番設定表／製作図の接続／展開接続図／パターンの解決／製作図の文字",
         ]))
 
 
-def _run(kind, files):
-    progress = st.progress(0.0, text="準備中...")
-
-    def on_progress(done, total, name):
-        progress.progress(done / total, text=f"抽出中 ({done + 1}/{total}): {name}")
-
-    items = [(f.name, f.getvalue()) for f in files]
-    results, errors = extract_from_uploads(items, progress=on_progress)
-    progress.empty()
-    st.session_state[_result_key(kind)] = {
-        'sig': _signature(files),
-        'results': results,
-        'errors': errors,
-        'xlsx': build_workbook(results),
-    }
+def _render_uploader(drawing_set, label):
+    """1つのセットのアップローダーと、受け取った内容の件数・警告。Returns: 処理対象の UploadedFile リスト。"""
+    uploaded = st.file_uploader(f"{label}（複数可，フォルダ可）", accept_multiple_files=True,
+                                key=f'uploader_{drawing_set}')
+    files, ignored, skipped, dwg = _target_files(uploaded or [])
+    if uploaded:
+        st.caption(f"処理対象 {len(files)} 件（図番形式でないファイル {ignored} 件は無視）")
+    for name in skipped:
+        st.warning(f"{name} は同名のファイルが先にあるためスキップしました。")
+    for name in dwg:
+        st.warning(f"{name} はDWGファイルのため読み込めません。DXFに変換してアップロードしてください。")
+    return files
 
 
-def _render_result(kind, state, files):
-    for name, message in state['errors']:
-        st.error(f"{name} を処理できませんでした: {message}")
-    results = state['results']
-    total = sum(len(r['cables']) for r in results)
-    st.subheader("抽出結果")
-    st.caption(f"{len(results)} 図面・ケーブル {total} 件（図面内の重複は1件に集約）")
-    _render_excel_preview(kind, results, files)
-    st.download_button(
-        "分析結果ダウンロード", data=state['xlsx'], file_name=EXCEL_FILENAMES[kind],
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary", key=f'download_{kind}',
-    )
+def _run_check(files_405, files_393, sig):
+    """2つのセットを読んで照合・比較し、結果と Excel をセッションに保存する。進捗は円形の spinner と、段階・ファイル名の caption。"""
+    with st.spinner(SPINNER_TEXT):
+        status = st.empty()
+
+        def on_progress(done, total, name, phase):
+            status.caption(f"{phase} ({done + 1}/{total}): {name}")
+
+        result, errors = run_check([(f.name, f.getvalue()) for f in files_405],
+                                   [(f.name, f.getvalue()) for f in files_393], progress=on_progress)
+        status.caption(SECTION_STATUS_TEXT)
+        xlsx = build_check_workbook(result)
+        status.empty()
+    st.session_state[CHECK_RESULT_KEY] = {'sig': sig, 'result': result, 'errors': errors, 'xlsx': xlsx}
 
 
-def _render_excel_preview(kind, results, files):
-    """出力する Excel の中身のプレビュー（DXF-extract-labels の「抽出結果プレビュー」と同じ表示スタイル）。
+def _drawing_options(files_405, files_393):
+    """プレビューの「図面を表示」で選べる図面 {表示名: UploadedFile}（展開接続図 → 製作図の順、それぞれ図番順）。"""
+    options = {}
+    for drawing_set, files in ((SET_405, files_405), (SET_393, files_393)):
+        for f in sorted(files, key=lambda f: _stem(f.name)):
+            options[f"{_stem(f.name)}（{drawing_set}）"] = f
+    return options
 
-    シート名で選び、そのシートを Excel と同じ内容の表で出す（シートの組み立ては `preview_sheets()`。
-    ダウンロードする Excel と同じ関数）。図番ごとのシートでは、その図面の「図面を表示」トグルも出す。
-    シートを選び直す・トグルを操作したら、枠を開いたままにする（on_change。無条件に開くと初回から開いてしまう）。"""
-    sheets = dict(preview_sheets(results))
+
+def _render_check_preview(result, files_405, files_393):
+    """出力する Excel の中身のプレビュー（シートの組み立ては `preview_sheets()`。ダウンロードする Excel と同じ関数）。
+    シートの選択のほかに、アップロードした図面を選んで viewer で見る「図面を表示」トグルを持つ（ケーブル番号は赤字）。
+    シート・トグル・図面を操作したら、枠を開いたままにする（on_change。無条件に開くと初回から開いてしまう）。"""
+    sheets = dict(check_preview_sheets(result))
     names = list(sheets)
-    key, open_key = f'preview_sheet_{kind}', f'preview_expanded_{kind}'
+    key, open_key = 'preview_sheet_check', 'preview_expanded_check'
     if st.session_state.get(key) not in names:
         st.session_state.pop(key, None)  # 入力を差し替えて前回のシートが無いときは先頭（Summary）に戻す
 
@@ -149,170 +135,22 @@ def _render_excel_preview(kind, results, files):
         st.session_state[open_key] = True
 
     with st.expander("分析結果プレビュー", expanded=st.session_state.get(open_key, False)):
-        sheet = st.selectbox("シートを選択", names, key=key, on_change=mark_expanded,
-                             width=sheet_select_width(names))
-        _render_preview_viewer(kind, sheet, files, mark_expanded)
-        widths, table_width = column_widths(sheets[sheet])
-        column_config = {col: st.column_config.Column(width=px) for col, px in widths.items()}
-        st.dataframe(sheets[sheet], width=table_width, hide_index=True, column_config=column_config,
-                     key=f'preview_table_{kind}')
-
-
-def _render_preview_viewer(kind, sheet, files, mark_expanded):
-    """図番ごとのシート（シート名＝図番を31文字に切ったもの）なら「図面を表示」トグルを出し、ON なら図面を出す。
-    Summary・ケーブル一覧など図面に対応しないシートでは何も出さない。"""
-    by_sheet = {os.path.splitext(f.name)[0][:31]: f for f in files}
-    uf = by_sheet.get(sheet)
-    if uf is None:
-        return
-    if st.toggle("図面を表示", value=False, key=f'preview_viewer_{kind}_{sheet}', on_change=mark_expanded):
-        cable_viewer.render_cable_viewer(uf.name, uf.getvalue(), key=f'preview_viewer_mount_{kind}')
-
-
-def _render_tab(kind, drawing_name, hint):
-    st.write(hint)
-    uploaded = st.file_uploader(
-        f"{drawing_name}（複数可，フォルダ可）", accept_multiple_files=True,
-        key=f'uploader_{kind}',
-    )
-    files, ignored, skipped, dwg = _target_files(uploaded or [])
-
-    if uploaded:
-        st.caption(f"処理対象 {len(files)} 件（図番形式でないファイル {ignored} 件は無視）")
-    for name in skipped:
-        st.warning(f"{name} は同名のファイルが先にあるためスキップしました。")
-    for name in dwg:
-        st.warning(f"{name} はDWGファイルのため読み込めません。DXFに変換してアップロードしてください。")
-
-    if not files:
-        st.info("図番形式（例: EE6892-405-08A.dxf）のDXFファイルをアップロードしてください。")
-        return
-
-    if st.button("ケーブルを抽出", type="primary", key=f'run_{kind}'):
-        _run(kind, files)
-
-    state = st.session_state.get(_result_key(kind))
-    if state and state['sig'] == _signature(files):
-        _render_result(kind, state, files)
-
-
-def _compare_signature(f405, f393):
-    return ((f405.name, f405.size), (f393.name, f393.size))
-
-
-def _run_compare(f405, f393):
-    """2つのExcelを読んで比較し、結果をセッションに保存する。読めなければ ValueError。"""
-    map_405 = read_cable_list(f405, "展開接続図のExcel")
-    map_393 = read_cable_list(f393, "ケーブル製作図のExcel")
-    rows = compare_cables(map_405, map_393)
-    groups = compare_groups(map_405, map_393, read_drawing_titles(f393, "ケーブル製作図のExcel"))
-    st.session_state[COMPARE_RESULT_KEY] = {
-        'sig': _compare_signature(f405, f393),
-        'rows': rows,
-        'groups': groups,
-        'names': (f405.name, f393.name),
-        'xlsx': build_compare_workbook(rows, f405.name, f393.name, groups),
-    }
-
-
-def _render_compare_result(state):
-    rows = state['rows']
-    counts = count_rows(rows)
-    st.subheader("比較結果")
-    st.caption(
-        f"ケーブル {len(rows)} 件（両方にある {counts['both']} 件・"
-        f"展開接続図だけ {counts['405only']} 件・ケーブル製作図だけ {counts['393only']} 件）"
-    )
-    groups = state['groups']
-    sheet_names = [ALL_SHEET, *group_sheet_names([g['name'] for g in groups])]
-    for i, (tab, sheet) in enumerate(zip(st.tabs(sheet_names), [rows, *[g['rows'] for g in groups]])):
-        with tab:
-            if i:
-                st.caption(f"グループの図面 {len(groups[i - 1]['drawings'])} 件: "
-                           + "、".join(groups[i - 1]['drawings']))
-            st.dataframe(compare_frame(sheet), hide_index=True, key=f'compare_table_{i}')
-    st.download_button(
-        "Excelをダウンロード", data=state['xlsx'], file_name=COMPARE_FILENAME,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary", key='download_compare',
-    )
-
-
-def _render_compare_viewer():
-    """比較タブの図面表示。DXF を1ファイルアップロードすると、ボタン無しですぐ viewer で表示する
-    （次の図面は、アップロードし直す）。"""
-    st.subheader("図面の表示")
-    st.write("DXFファイルをアップロードすると、ケーブル番号を含む文字を赤字にして表示します。")
-    uploaded = st.file_uploader("図面（DXF。1ファイルずつ）", type=['dxf'], key='compare_dxf')
-    if uploaded is not None:
-        cable_viewer.render_cable_viewer(uploaded.name, uploaded.getvalue(), key='viewer_compare_mount')
-
-
-def _render_compare_tab():
-    st.write("展開接続図から出力したExcelと、ケーブル製作図から出力したExcelを比較します。")
-    f405 = st.file_uploader("展開接続図のExcel（cable_list_405.xlsx）", type=['xlsx'], key='compare_405')
-    f393 = st.file_uploader("ケーブル製作図のExcel（cable_list_393.xlsx）", type=['xlsx'], key='compare_393')
-
-    ready = f405 is not None and f393 is not None
-    if not ready:
-        st.info("展開接続図とケーブル製作図、両方のExcelファイルをアップロードしてください。")
-    if st.button("比較", type="primary", key='run_compare', disabled=not ready):
-        try:
-            _run_compare(f405, f393)
-        except ValueError as e:
-            st.session_state.pop(COMPARE_RESULT_KEY, None)
-            st.error(str(e))
-
-    state = st.session_state.get(COMPARE_RESULT_KEY)
-    if ready and state and state['sig'] == _compare_signature(f405, f393):
-        _render_compare_result(state)
-
-    st.divider()
-    _render_compare_viewer()
-
-
-def _check_signature(files):
-    return _signature(files)
-
-
-def _run_check(files):
-    progress = st.progress(0.0, text="準備中...")
-
-    def on_progress(done, total, name, phase):
-        progress.progress(done / total, text=f"{phase}中 ({done + 1}/{total}): {name}")
-
-    drawings, errors = analyze_uploads([(f.name, f.getvalue()) for f in files], progress=on_progress)
-    progress.empty()
-    result = check_consistency(drawings)
-    st.session_state[CHECK_RESULT_KEY] = {
-        'sig': _check_signature(files),
-        'result': result,
-        'errors': errors,
-        'xlsx': build_check_workbook(result),
-    }
-
-
-def _render_check_preview(result):
-    """出力する Excel の中身のプレビュー（シートの組み立ては `preview_sheets()`。ダウンロードする Excel と同じ関数）。"""
-    sheets = dict(check_preview_sheets(result))
-    names = list(sheets)
-    key, open_key = 'preview_sheet_check', 'preview_expanded_check'
-    if st.session_state.get(key) not in names:
-        st.session_state.pop(key, None)
-
-    def mark_expanded():
-        st.session_state[open_key] = True
-
-    with st.expander("分析結果プレビュー", expanded=st.session_state.get(open_key, False)):
-        sheet = st.selectbox("シートを選択", names, key=key, on_change=mark_expanded,
-                             width=sheet_select_width(names))
+        sheet = st.selectbox("シートを選択", names, key=key, on_change=mark_expanded, width=sheet_select_width(names))
+        options = _drawing_options(files_405, files_393)
+        if st.session_state.get('preview_drawing_check') not in options:
+            st.session_state.pop('preview_drawing_check', None)
+        if options and st.toggle("図面を表示", value=False, key='preview_viewer_check', on_change=mark_expanded):
+            label = st.selectbox("図面を選択", list(options), key='preview_drawing_check', on_change=mark_expanded,
+                                 width=sheet_select_width(list(options)))
+            uf = options[label]
+            cable_viewer.render_cable_viewer(uf.name, uf.getvalue(), key='preview_viewer_mount_check')
         widths, table_width = column_widths(sheets[sheet])
         column_config = {col: st.column_config.Column(width=px) for col, px in widths.items()}
         st.dataframe(sheets[sheet], width=table_width, hide_index=True, column_config=column_config,
                      key='preview_table_check')
 
 
-def _render_check_result(state):
+def _render_check_result(state, files_405, files_393):
     for name, message in state['errors']:
         st.error(f"{name} を処理できませんでした: {message}")
     result = state['result']
@@ -327,14 +165,9 @@ def _render_check_result(state):
     if result['unused']:
         st.info(f"照合に使っていない図面 {len(result['unused'])} 件: {'、'.join(result['unused'])}"
                 "（ケーブル一覧表・線番設定表・ケーブル製作図のどれにも当たらず、一覧表の図面パターン〈製作図・接続図〉も指していません）")
-    rows = result['rows']
-    kinds = {k: sum(k in d['kinds'] for d in result['drawings'])
-             for k in ('ケーブル一覧表', '線番設定表', 'ケーブル製作図', '展開接続図')}
     st.subheader("チェック結果")
-    st.caption(f"{len(result['drawings'])} 図面（一覧表 {kinds['ケーブル一覧表']}・線番設定表 {kinds['線番設定表']}・"
-               f"製作図 {kinds['ケーブル製作図']}・展開接続図 {kinds['展開接続図']}）・ケーブル {len(rows)} 行"
-               f"（不整合 {sum(r['不整合数'] > 0 for r in rows)} 行・要確認 {sum(r['要確認数'] > 0 for r in rows)} 行）")
-    _render_check_preview(result)
+    st.caption(_summary_caption(result))
+    _render_check_preview(result, files_405, files_393)
     st.download_button(
         "分析結果ダウンロード", data=state['xlsx'], file_name=CHECK_FILENAME,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -342,46 +175,44 @@ def _render_check_result(state):
     )
 
 
-def _render_check_tab():
-    st.write(
-        "ケーブル製作図（393）と展開接続図（405）のDXFをまとめてアップロードします。393の図面（ケーブル一覧表・"
-        "線番設定表・ケーブル製作図）は内容から見分け、一覧表の「接続図図面番号」が指す図面を展開接続図として読みます。"
-        "ケーブル一覧表の1行ごとに、図面の対応・端末（ユニット・モジュール・機器符号・部品種別）・ケーブル（種類・芯数）・"
-        "芯線（線番・PIN・色）の整合性をチェックします（他のタブとは独立。DXFはここでもう一度アップロードします）。"
-    )
-    uploaded = st.file_uploader("ケーブル製作図（393）・展開接続図（405）（複数可，フォルダ可）", accept_multiple_files=True,
-                                key='uploader_check')
-    files, ignored, skipped, dwg = _target_files(uploaded or [])
-
-    if uploaded:
-        st.caption(f"処理対象 {len(files)} 件（図番形式でないファイル {ignored} 件は無視）")
-    for name in skipped:
-        st.warning(f"{name} は同名のファイルが先にあるためスキップしました。")
-    for name in dwg:
-        st.warning(f"{name} はDWGファイルのため読み込めません。DXFに変換してアップロードしてください。")
-
-    if not files:
-        st.info("図番形式（例: EE6892-365-61C.dxf）のDXFファイルをアップロードしてください。")
-        return
-
-    if st.button("整合性をチェック", type="primary", key='run_check'):
-        _run_check(files)
-
-    state = st.session_state.get(CHECK_RESULT_KEY)
-    if state and state['sig'] == _check_signature(files):
-        _render_check_result(state)
+def _summary_caption(result):
+    """結果の件数の要約（図面・ケーブル番号の比較・一覧表の行ごとの照合）。"""
+    drawings, rows = result['drawings'], result['rows']
+    count = lambda kind: sum(kind in d['kinds'] for d in drawings)  # noqa: E731
+    compare = result['compare']['rows']
+    both = sum(bool(r['drawings_405'] and r['drawings_393']) for r in compare)
+    only_405 = sum(bool(r['drawings_405'] and not r['drawings_393']) for r in compare)
+    return (f"展開接続図 {sum(d['set'] == SET_405 for d in drawings)} 図面・ケーブル製作図 {sum(d['set'] == SET_393 for d in drawings)} 図面"
+            f"（一覧表 {count(KIND_LIST)}・線番設定表 {count(KIND_WIRE)}・製作図 {count(KIND_FAB)}・"
+            f"照合した展開接続図 {count(KIND_SCHEMATIC)}）／"
+            f"ケーブル番号 {len(compare)} 件（両方 {both}・展開接続図だけ {only_405}・ケーブル製作図だけ {len(compare) - both - only_405}）／"
+            f"一覧表の行 {len(rows)} 行（不整合 {sum(r['不整合数'] > 0 for r in rows)} 行・要確認 {sum(r['要確認数'] > 0 for r in rows)} 行）")
 
 
 def main():
     _render_header()
-    tabs = st.tabs([k[1] for k in KINDS] + [COMPARE_TAB, CHECK_TAB])
-    for tab, (kind, _, drawing_name, hint) in zip(tabs, KINDS):
-        with tab:
-            _render_tab(kind, drawing_name, hint)
-    with tabs[-2]:
-        _render_compare_tab()
-    with tabs[-1]:
-        _render_check_tab()
+    col_405, col_393 = st.columns(2)
+    with col_405:
+        files_405 = _render_uploader(SET_405, SET_LABELS[SET_405])
+    with col_393:
+        files_393 = _render_uploader(SET_393, SET_LABELS[SET_393])
+        files_393, same_name = _drop_names_of(files_393, files_405)
+        for name in same_name:
+            st.warning(f"{name} は展開接続図（405）に同じ名前があるため、ケーブル製作図（393）の側をスキップしました。")
+
+    if not files_405 and not files_393:
+        st.info("図番形式（例: EE6892-610-01B.dxf）のDXFファイルを、展開接続図・ケーブル製作図のどちらか（または両方）にアップロードしてください。")
+        return
+
+    sig = (_signature(files_405), _signature(files_393))
+    state = st.session_state.get(CHECK_RESULT_KEY)
+    done = bool(state and state['sig'] == sig)
+    # 今の入力の結果が出ているときは、再実行できるが「次の操作」ではないので白（結果を出したら青はダウンロード）
+    if st.button("整合性をチェック", type="secondary" if done else "primary", key='run_check'):
+        _run_check(files_405, files_393, sig)
+        st.rerun()
+    if done:
+        _render_check_result(state, files_405, files_393)
 
 
 main()

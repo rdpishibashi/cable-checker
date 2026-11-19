@@ -2,9 +2,11 @@
 
 3段に分ける。
   1. `analyze_drawing(path, name)` — DXF を1回だけ読み、393 の3種類の読み取りを走らせて、図面ごとの dict にする
-  2. `analyze_uploads(items)` — 全ファイルに 1 を行い、一覧表の「接続図パターン」が指す図面だけを
-     `schematic_reader.analyze_schematic()` で読む（2段目）。結果は図面の dict の `schematic` に入る
+  2. `analyze_uploads(items_405, items_393)` — 393 のファイルに 1 を行い、405 のファイルは抽出だけを行い、一覧表の「接続図パターン」が指す
+     405 の図面だけを `schematic_reader.analyze_schematic()` で読む。結果は図面の dict の `schematic` に入る。ケーブル番号の抽出結果も返す
   3. `check_consistency(drawings)` — 一覧表の行ごとに、項目（図面の対応・端末・ケーブル・芯線）の判定と根拠を作る
+`run_check(items_405, items_393)` が 2・3 とケーブル番号の比較（`cable_compare`）をまとめて行う。
+パターンの解決はセットの中で行う: 製作図・線番設定表のパターンは 393 のセット、接続図パターンと図中の参照は 405 のセット。
 
 定義は docs/handoff_schematic_405_check.md の「照合の定義」が正。チェーンは
 一覧表の行 →（製作図パターン）→ 製作図 →（注記の線番設定表パターン）→ 線番設定表、
@@ -14,7 +16,7 @@
 1つの項目に複数の比較（線番設定表・製作図・展開接続図）があるときは、最も重いものをその項目の判定にする。
 
 図面の dict（`analyze_drawing()` の戻り値＋2段目）:
-  drawing_number, no_text（文字が1つも無い）, kinds（'ケーブル一覧表'・'線番設定表'・'ケーブル製作図'・'展開接続図'）,
+  drawing_number, set（'405'＝展開接続図のセット／'393'＝ケーブル製作図のセット。必ずある）, no_text（文字が1つも無い）, kinds（'ケーブル一覧表'・'線番設定表'・'ケーブル製作図'・'展開接続図'）,
   list_rows（一覧表の行。`cable_list_table.parse()` の rows）,
   wire_rows（線番設定表の行。`'_lines'` に接続先ごとの行）, wire_notes（注記の製作図パターン）,
   fab_wire_numbers（製作図の線番の表にある `*n` の n）, fab_notes（注記の線番設定表パターン）,
@@ -28,6 +30,8 @@ import unicodedata
 from collections import Counter
 
 from . import cable_list_table, fab_drawing, wire_number_table
+from .cable_compare import compare_extracts
+from .cable_extractor import extract_cables
 from .drawing_geometry import load
 from .schematic_reader import analyze_schematic
 
@@ -41,9 +45,12 @@ KIND_LIST = 'ケーブル一覧表'
 KIND_WIRE = '線番設定表'
 KIND_FAB = 'ケーブル製作図'
 KIND_SCHEMATIC = '展開接続図'
-KIND_REF = '図中の参照'  # パターンの解決シートの「参照元図面種別」（展開接続図の文字が指す。照合には使わない）
+KIND_REF = '図中の参照'  # 図番パターン照合シートの「参照元図面種別」（展開接続図の文字が指す。照合には使わない）
 
-PHASE_DRAWINGS = '図面の読み取り'
+SET_405, SET_393 = '405', '393'     # アップロードのセット（展開接続図／ケーブル製作図）
+
+PHASE_DRAWINGS = 'ケーブル製作図の読み取り'
+PHASE_EXTRACT = '展開接続図の抽出'
 PHASE_SCHEMATIC = '展開接続図の読み取り'
 
 # 項目（グループ, 項目）。整合性チェックシートの列と、Summary の行になる。列名は `グループ｜項目`
@@ -90,8 +97,8 @@ _DRAIN = {'SG', 'SH'}
 
 # ---------------------------------------------------------------- 1. 図面ごとの解析
 
-def _empty_drawing(name, no_text=False):
-    return {'drawing_number': name, 'no_text': no_text, 'kinds': [], 'list_rows': [], 'wire_rows': [],
+def _empty_drawing(name, no_text=False, drawing_set=SET_393):
+    return {'drawing_number': name, 'set': drawing_set, 'no_text': no_text, 'kinds': [], 'list_rows': [], 'wire_rows': [],
             'wire_notes': [], 'fab_wire_numbers': set(), 'fab_notes': [], 'fab_texts': [], 'fab_text': '',
             'fab_conns': [], 'schematic': None}
 
@@ -138,6 +145,7 @@ def analyze_drawing(path, name):
         kinds.append(KIND_FAB)
     return {
         'drawing_number': name,
+        'set': SET_393,
         'no_text': not geo.txts,
         'kinds': kinds,
         'list_rows': listing['rows'] if listing else [],
@@ -152,40 +160,73 @@ def analyze_drawing(path, name):
     }
 
 
-def analyze_uploads(items, progress=None):
-    """アップロードされたファイル群を解析する。1段目で全ファイルを 393 として読み、2段目で一覧表の「接続図パターン」が指す図面だけを
-    展開接続図（405）として読む。
+def analyze_uploads(items_405, items_393, progress=None):
+    """アップロードされた2つのセットを解析する。393 は抽出と 393 の読み取り、405 は抽出だけを行い、そのあと一覧表の「接続図パターン」が指す
+    405 の図面だけを展開接続図として読む。
 
     Args:
-        items: [(元のファイル名, bytes), ...]。呼び出し側でフィルタ・同名除去済みであること。
+        items_405, items_393: [(元のファイル名, bytes), ...]。呼び出し側でフィルタ・同名除去済みであること。
         progress: 省略可。`progress(完了数, 全体数, 図番またはファイル名, 段階)` を各ファイルの処理前に呼ぶ（段階は PHASE_*）。
 
     Returns:
-        (図面の dict のリスト, エラーのリスト)。エラーは [(ファイル名, メッセージ), ...]。
-        1つのファイルが壊れていても残りは処理を続ける。
+        (図面の dict のリスト, 抽出結果, エラーのリスト)。抽出結果は {'405': [extract_cables の結果], '393': [...]}（図番順）。
+        エラーは [(ファイル名, メッセージ), ...]。1つのファイルが壊れていても残りは処理を続ける（壊れたファイルは図面にも抽出結果にも入らない）。
     """
     drawings, errors, files = [], [], {}
-    for i, (name, data) in enumerate(items):
+    extracts = {SET_405: [], SET_393: []}
+    for i, (name, data) in enumerate(items_393):
         if progress:
-            progress(i, len(items), name, PHASE_DRAWINGS)
+            progress(i, len(items_393), name, PHASE_DRAWINGS)
         stem = os.path.splitext(os.path.basename(name))[0]
-        files[stem] = (name, data)
         try:
-            drawings.append(_analyze_bytes(data, stem))
+            extract, drawing = _with_temp_file(data, lambda path: (extract_cables(path, name), analyze_drawing(path, stem)))
         except Exception as e:  # noqa: BLE001 - 壊れた DXF 1件で全体を止めない
             errors.append((name, f'{type(e).__name__}: {e}'))
-    by_name = {d['drawing_number']: d for d in drawings}
+            continue
+        extracts[SET_393].append(extract)
+        drawings.append(drawing)
+    for i, (name, data) in enumerate(items_405):
+        if progress:
+            progress(i, len(items_405), name, PHASE_EXTRACT)
+        stem = os.path.splitext(os.path.basename(name))[0]
+        try:
+            extract = _with_temp_file(data, lambda path: extract_cables(path, name))
+        except Exception as e:  # noqa: BLE001
+            errors.append((name, f'{type(e).__name__}: {e}'))
+            continue
+        files[stem] = (name, data)
+        extracts[SET_405].append(extract)
+        drawings.append(_empty_drawing(stem, drawing_set=SET_405))
+    by_name = _index(drawings, SET_405)
     targets = schematic_targets(drawings)
     for i, stem in enumerate(targets):
         if progress:
             progress(i, len(targets), stem, PHASE_SCHEMATIC)
         name, data = files[stem]
         try:
-            by_name[stem]['schematic'] = _with_temp_file(data, lambda path: analyze_schematic(path, stem))
-            by_name[stem]['kinds'].append(KIND_SCHEMATIC)
+            schematic = _with_temp_file(data, lambda path: analyze_schematic(path, stem))
         except Exception as e:  # noqa: BLE001
             errors.append((name, f'{type(e).__name__}: {e}'))
-    return drawings, errors
+            continue
+        by_name[stem]['schematic'] = schematic
+        by_name[stem]['kinds'].append(KIND_SCHEMATIC)
+        by_name[stem]['no_text'] = schematic['no_text']
+    for results in extracts.values():
+        results.sort(key=lambda r: r['drawing_number'])
+    return drawings, extracts, errors
+
+
+def run_check(items_405, items_393, progress=None):
+    """解析（`analyze_uploads`）→ 照合（`check_consistency`）→ ケーブル番号の比較（`compare_extracts`）をまとめて行う。
+
+    Returns:
+        (check_consistency() の戻り値に 'extracts'（抽出結果）と 'compare'（`compare_extracts()` の戻り値）を足したもの, エラーのリスト)
+    """
+    drawings, extracts, errors = analyze_uploads(items_405, items_393, progress)
+    result = check_consistency(drawings)
+    result['extracts'] = extracts
+    result['compare'] = compare_extracts(extracts[SET_405], extracts[SET_393])
+    return result, errors
 
 
 def _with_temp_file(data, func):
@@ -194,11 +235,6 @@ def _with_temp_file(data, func):
         with open(path, 'wb') as f:
             f.write(data)
         return func(path)
-
-
-def _analyze_bytes(data, stem):
-    return _with_temp_file(data, lambda path: analyze_drawing(path, stem))
-
 
 
 # ---------------------------------------------------------------- 照合の補助（パターンの解決など）
@@ -227,6 +263,11 @@ def wire_pattern_regex(pattern):
     return re.compile(r'^[A-Z]{2}\d{4}' + re.escape(pattern.upper()) + '[A-Z]?$')
 
 
+def _index(drawings, drawing_set):
+    """セットごとの {図番: 図面の dict}。パターンの解決はセットの中で行う（製作図・線番設定表は 393、展開接続図は 405）。"""
+    return {d['drawing_number']: d for d in drawings if d['set'] == drawing_set}
+
+
 def _resolve(regex, by_name):
     return [d for name, d in by_name.items() if regex.match(name.upper())]
 
@@ -253,20 +294,11 @@ def _cable_wire_rows(cable, wire_drawings):
 
 # ---------------------------------------------------------------- 展開接続図の読み取り（2段目）
 
-_KINDS_393 = (KIND_LIST, KIND_WIRE, KIND_FAB)
-
-
 def schematic_targets(drawings):
-    """一覧表の「接続図パターン」が指す図面の図番（昇順）。2段目はこの図面だけを展開接続図として読む。
-
-    393 の表（一覧表・線番設定表・製作図の線番/PIN）が見つかった図面は除く。`EE****-637-**` のようなパターンは、
-    展開接続図 EE6888-637-01A だけでなく、同じ `-637-` を持つ 393 の線番設定表にも当たるため（読むと、393 の図面にある
-    ケーブル番号の文字が展開接続図の出現として数えられてしまう）。
-    """
-    by_name = {d['drawing_number']: d for d in drawings}
+    """一覧表の「接続図パターン」が指す展開接続図（405 のセット）の図番（昇順）。この図面だけを展開接続図として読む。"""
+    by_name = _index(drawings, SET_405)
     patterns = {p for d in drawings for r in d['list_rows'] for p in _values(r.get('接続図パターン'))}
-    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), by_name)
-                   if not set(d['kinds']) & set(_KINDS_393)})
+    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), by_name)})
 
 
 # ---------------------------------------------------------------- 照合の部品
@@ -462,9 +494,8 @@ def _wire_where(sel):
 # ---------------------------------------------------------------- 一覧表の行 → 展開接続図
 
 def _schematic_names(ctx, patterns):
-    """接続図パターンが指す図面（393 の表が見つかった図面は展開接続図ではないので除く。`schematic_targets()` と同じ）。"""
-    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), ctx.by_name)
-                   if not set(d['kinds']) & set(_KINDS_393)})
+    """接続図パターンが指す展開接続図（405 のセット。`schematic_targets()` と同じ）。"""
+    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), ctx.by_name_405)})
 
 
 def _side_names(occ, side):
@@ -509,7 +540,7 @@ def _pick_occurrence(ctx, row):
     cable = row['ケーブル番号']
     cands = []
     for name in _schematic_names(ctx, _values(row.get('接続図パターン'))):
-        d = ctx.by_name[name]
+        d = ctx.by_name_405[name]
         s = d.get('schematic')
         if not s:
             continue
@@ -850,7 +881,7 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
 
 
 def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns):
-    """芯線の 線番・PIN・色 のセルと、芯線の照合の行。"""
+    """芯線の 線番・PIN・色 のセルと、芯線照合の行。"""
     num_cell, pin_cell, color_cell = _Cell('芯線 線番'), _Cell('芯線 PIN'), _Cell('芯線 色')
     fab_names = [d['drawing_number'] for d in ch['fabs']]
 
@@ -930,7 +961,8 @@ def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns):
 class _Ctx:
     def __init__(self, drawings):
         self.drawings = drawings
-        self.by_name = {d['drawing_number']: d for d in drawings}
+        self.by_name_393 = _index(drawings, SET_393)
+        self.by_name_405 = _index(drawings, SET_405)
         self.schematics_read = any(d.get('schematic') is not None for d in drawings)
         self.unit_keys = _all_unit_keys(drawings)
 
@@ -993,8 +1025,8 @@ def _correspondence_cells(ctx, row, ch, list_name, pick):
         if not names:
             sch_cell.add('展開接続図', NG, f'アップロードに無い（パターン {"、".join(patterns)}: 0件）')
         else:
-            read = [n for n in names if ctx.by_name[n].get('schematic') is not None]
-            unreadable = [n for n in read if ctx.by_name[n]['schematic']['error'] or ctx.by_name[n]['schematic']['no_text']]
+            read = [n for n in names if ctx.by_name_405[n].get('schematic') is not None]
+            unreadable = [n for n in read if ctx.by_name_405[n]['schematic']['error'] or ctx.by_name_405[n]['schematic']['no_text']]
             sch_cell.source(*names).value('展開接続図', '、'.join(names))
             if pick is not None:
                 sch_cell.add('展開接続図', OK, f'{pick["drawing"]["drawing_number"]} に出現あり（{pick["occ"]["how"]}）')
@@ -1008,9 +1040,9 @@ def _correspondence_cells(ctx, row, ch, list_name, pick):
 
 
 def _evaluate_row(ctx, list_name, row):
-    """一覧表の1行について、全項目のセルと芯線の照合の行を作る。Returns: ({項目の列名: [セル]}, 芯線の照合の行)"""
+    """一覧表の1行について、全項目のセルと芯線照合の行を作る。Returns: ({項目の列名: [セル]}, 芯線照合の行)"""
     cable = row['ケーブル番号']
-    ch = _chain(row, ctx.by_name)
+    ch = _chain(row, ctx.by_name_393)
     pick = _pick_occurrence(ctx, row)
     fab_conns = [(d, c) for d in ch['fabs'] for c in d['fab_conns'] if c.get('端の数') == 2] if ch['fab_ok'] else []
     multi = pick is not None and _is_single_multicore(row, pick['occ'], len(fab_conns))
@@ -1081,7 +1113,7 @@ def check_consistency(drawings):
     Returns:
         {'rows': [{'ケーブル番号', '一覧表の図番', '一覧表の行', '不整合数', '要確認数', 'cells': {列名: 記号}, 'links': {列名: 照合明細の通し番号}}],
          'details': [照合明細の行],            # 整合性チェックの全セルに1行ずつ（線番設定表だけ3行）
-         'wires': [芯線の照合の行],
+         'wires': [芯線照合の行],
          'drawings': drawings, 'unused': [照合に使っていない図面の図番]}
         行の並びはケーブル番号→一覧表の図番→一覧表の行。一覧表に無いケーブル（線番設定表・展開接続図にだけある）は
         ケーブル番号の並びの中に、一覧表の図番・行を空にして入る。
@@ -1134,7 +1166,7 @@ def check_consistency(drawings):
         out['不整合数'], out['要確認数'] = int(n_ng), int(n_unread)
         rows.append(out)
 
-    # 照合に使っていない図面: 393 の種類が無く、どのパターンにも当たらない
+    # 照合に使っていない図面: 種類が無く（393 は表が見つからない・405 は展開接続図として読んでいない）、どのパターンにも当たらない
     # 図中の参照（KIND_REF_IN_SCHEMATIC）で指されただけの図面は、照合には使っていないので「使っていない図面」のまま
     hit = {name for r in pattern_resolutions(drawings) if r['参照元図面種別'] != KIND_REF for name in r['当たった図面'].split('、') if name}
     unused = [d['drawing_number'] for d in sorted(drawings, key=lambda d: d['drawing_number'])
@@ -1152,10 +1184,10 @@ def pattern_resolutions(drawings):
         参照元図面種別: パターンの書かれている場所（一覧表／製作図の注記／線番設定表の注記／図中の参照）。
         一覧表＝ケーブル一覧表の製作図パターン・接続図パターン、図中の参照＝展開接続図の `to … (-405-08)` のような文字（備考に参照元の文字。照合には使わない）。
     """
-    by_name = {d['drawing_number']: d for d in drawings}
+    by_393, by_405 = _index(drawings, SET_393), _index(drawings, SET_405)
     out, seen = [], set()
 
-    def add(kind, source_kind, pattern, make_regex, source, remark=''):
+    def add(kind, source_kind, pattern, make_regex, source, by_name, remark=''):
         hits = _resolve(make_regex(pattern), by_name)
         key = (kind, source_kind, pattern, source)
         if key in seen:
@@ -1168,18 +1200,18 @@ def pattern_resolutions(drawings):
         src = d['drawing_number']
         for r in d['list_rows']:
             for p in _values(r.get('製作図パターン')):
-                add('製作図', '一覧表', p, fab_pattern_regex, src)
+                add('製作図', '一覧表', p, fab_pattern_regex, src, by_393)
             for p in _values(r.get('接続図パターン')):
-                add('展開接続図', '一覧表', p, fab_pattern_regex, src)
+                add('展開接続図', '一覧表', p, fab_pattern_regex, src, by_405)
         for p in d['fab_notes']:
-            add('線番設定表', '製作図の注記', p, wire_pattern_regex, src)
+            add('線番設定表', '製作図の注記', p, wire_pattern_regex, src, by_393)
         for p in d['wire_notes']:
-            add('製作図', '線番設定表の注記', p, fab_pattern_regex, src)
+            add('製作図', '線番設定表の注記', p, fab_pattern_regex, src, by_393)
         refs = {}
         for ref in (d.get('schematic') or {}).get('refs', []):
             refs.setdefault(ref['pattern'], []).append(ref['text'])
         for p, texts in refs.items():
-            add('展開接続図', KIND_REF, p, wire_pattern_regex, src, remark=' ／ '.join(texts))
+            add('展開接続図', KIND_REF, p, wire_pattern_regex, src, by_405, remark=' ／ '.join(texts))
     return out
 
 

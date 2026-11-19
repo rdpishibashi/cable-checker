@@ -1,8 +1,9 @@
-"""整合性チェックの Excel 出力とプレビュー（streamlit 非依存）。
+"""整合性チェックの Excel 出力とプレビュー（streamlit 非依存）。1つの Excel に、整合性チェック・ケーブル番号の抽出と比較をまとめる。
 
-シート構成: `Summary`（項目ごとの記号の件数と、図面の種類ごとの件数）→ `整合性チェック`（1ケーブル1行＝一覧表の行。項目のセルは
-記号で、照合明細の該当行へのリンク）→ `照合明細`（セルごとの根拠）→ `芯線の照合`（線番接続IDごとの線番・PIN・色）→
-`ケーブル一覧表`・`線番設定表`・`製作図の接続`・`展開接続図`（読み取った明細）→ `パターンの解決`・`製作図の文字`（根拠）。
+シート構成: `Summary`（項目ごとの記号の件数と、図面・ケーブル番号の件数）→ `図面一覧`・`ケーブル抽出`（抽出した図面とケーブル番号）→
+`All Diff`・`<グループ名> Diff`（ケーブル番号の比較。展開接続図と製作図の図番を並べる）→ `整合性チェック`（1ケーブル1行＝一覧表の行。項目のセルは
+記号で、照合明細の該当行へのリンク）→ `照合明細`（セルごとの根拠）→ `芯線照合`（線番接続IDごとの線番・PIN・色）→
+`展開接続図`・`ケーブル一覧表`・`線番設定表`・`製作図の接続表`（読み取った明細）→ `製作図の文字`・`図番パターン照合`（根拠）。
 画面の「分析結果プレビュー」と Excel は同じ `preview_sheets()` から作る（別実装にしない）。
 プレビューの `整合性チェック` は見出し1段（`グループ｜項目`）、Excel は2段見出し（グループを結合）。
 記号の色は他の比較ツールと同じ薄い配色（○＝薄い緑、△＝薄い黄、×＝薄いピンク、？＝薄い青、－＝色なし）。
@@ -12,8 +13,10 @@ import io
 import pandas as pd
 
 from . import cable_list_table
-from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, NG, OK, SEP, SYMBOLS,
-                          UNREAD, WEAK, _codes, _values, fab_text_rows, pattern_resolutions)
+from .compare_output import (ALL_SHEET, compare_frame, count_rows, group_sheet_names, status_formats,
+                             write_compare_sheet)
+from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, NG, OK, SEP, SET_393,
+                          SET_405, SYMBOLS, UNREAD, WEAK, _codes, _values, fab_text_rows, pattern_resolutions)
 from .excel_output import display_width
 from .wire_number_table import split_unit_terminal
 
@@ -22,15 +25,21 @@ EXCEL_FILENAME = 'cable_consistency.xlsx'
 SUMMARY_SHEET = 'Summary'
 CHECK_SHEET = '整合性チェック'
 DETAIL_SHEET = '照合明細'
-WIRE_CHECK_SHEET = '芯線の照合'
+WIRE_CHECK_SHEET = '芯線照合'
+INDEX_SHEET = '図面一覧'
+EXTRACT_SHEET = 'ケーブル抽出'
 LIST_SHEET = 'ケーブル一覧表'
 WIRE_SHEET = '線番設定表'
-CONN_SHEET = '製作図の接続'
+CONN_SHEET = '製作図の接続表'
 SCHEMATIC_SHEET = '展開接続図'
-PATTERN_SHEET = 'パターンの解決'
+PATTERN_SHEET = '図番パターン照合'
 TEXT_SHEET = '製作図の文字'
-SHEET_NAMES = [SUMMARY_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, LIST_SHEET, WIRE_SHEET, CONN_SHEET,
-               SCHEMATIC_SHEET, PATTERN_SHEET, TEXT_SHEET]
+# 固定のシート（並び順）。`All Diff` と `<グループ名> Diff` は `ケーブル抽出` の後ろ、`整合性チェック` の前に入る
+FIXED_SHEET_NAMES = [SUMMARY_SHEET, INDEX_SHEET, EXTRACT_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, SCHEMATIC_SHEET,
+                     LIST_SHEET, WIRE_SHEET, CONN_SHEET, TEXT_SHEET, PATTERN_SHEET]
+SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル製作図（393）'}
+INDEX_COLUMNS = ['セット', '図番', 'タイトル', 'サブタイトル', '図面の種類', 'ケーブル数', '備考']
+EXTRACT_COLUMNS = ['セット', '図番', 'ケーブル番号', '備考']
 
 SUMMARY_COLUMNS = ['項目', *SYMBOLS, '件数']
 CHECK_KEYS = ['ケーブル番号', '一覧表の図番', '一覧表の行', '不整合数', '要確認数']
@@ -68,6 +77,18 @@ def _int_or_blank(values):
 
 # ---------------------------------------------------------------- シートの DataFrame
 
+def _cable_count_rows(rows):
+    """ケーブル番号の比較の件数（Summary の行）。"""
+    counts = count_rows(rows)
+    return [
+        ('ケーブル番号: 展開接続図', counts['405only'] + counts['both']),
+        ('ケーブル番号: ケーブル製作図', counts['393only'] + counts['both']),
+        ('ケーブル番号: 両方にある', counts['both']),
+        ('ケーブル番号: 展開接続図だけ', counts['405only']),
+        ('ケーブル番号: ケーブル製作図だけ', counts['393only']),
+    ]
+
+
 def summary_frame(result):
     rows = []
     for (group, item), col in zip(ITEMS, ITEM_COLUMNS):
@@ -80,10 +101,13 @@ def summary_frame(result):
         (f'図面: {KIND_LIST}', sum(KIND_LIST in d['kinds'] for d in drawings)),
         (f'図面: {KIND_WIRE}', sum(KIND_WIRE in d['kinds'] for d in drawings)),
         (f'図面: {KIND_FAB}（線番/PIN の表がある）', sum(KIND_FAB in d['kinds'] for d in drawings)),
-        (f'図面: {KIND_SCHEMATIC}', sum(KIND_SCHEMATIC in d['kinds'] for d in drawings)),
+        (f'図面: {KIND_SCHEMATIC}（照合に使った）', sum(KIND_SCHEMATIC in d['kinds'] for d in drawings)),
         ('図面: 文字の無い図面', sum(d['no_text'] for d in drawings)),
         ('図面: 照合に使っていない図面', len(result['unused'])),
         ('図面: 全体', len(drawings)),
+        ('図面: 展開接続図（405）のセット', sum(d['set'] == SET_405 for d in drawings)),
+        ('図面: ケーブル製作図（393）のセット', sum(d['set'] == SET_393 for d in drawings)),
+        *_cable_count_rows(result['compare']['rows']),
     ]
     rows += [[name, *[None] * len(SYMBOLS), n] for name, n in kinds]
     # 図面の種類の行は記号の列が空欄（None）。数値と空文字が混ざる object 列にすると Arrow に変換できないので整数型にそろえる
@@ -186,18 +210,56 @@ def text_frame(result):
     return pd.DataFrame(fab_text_rows(result['drawings']), columns=['図番', '文字'])
 
 
-def preview_sheets(result):
-    """出力する Excel の全シートを、Excel と同じ順で `[(シート名, DataFrame), ...]` にする。"""
+def index_frame(result):
+    """抽出した図面の一覧（展開接続図のセット → ケーブル製作図のセット。それぞれ図番順）。"""
+    unused = set(result['unused'])
+    extracts = {(drawing_set, r['drawing_number']): r for drawing_set, results in result['extracts'].items() for r in results}
+    rows = []
+    for drawing_set in (SET_405, SET_393):
+        for d in sorted((d for d in result['drawings'] if d['set'] == drawing_set), key=lambda d: d['drawing_number']):
+            e = extracts[(drawing_set, d['drawing_number'])]
+            remark = [x for x, on in (('文字が無い', d['no_text']), ('照合に使っていない', d['drawing_number'] in unused)) if on]
+            rows.append([SET_LABELS[drawing_set], d['drawing_number'], e['title'], e['subtitle'], '、'.join(d['kinds']),
+                         len(e['cables']), '、'.join(remark)])
+    return pd.DataFrame(rows, columns=INDEX_COLUMNS)
+
+
+def extract_frame(result):
+    """抽出したケーブル番号（図番×ケーブル番号×備考。展開接続図のセット → ケーブル製作図のセット）。"""
+    rows = [[SET_LABELS[drawing_set], r['drawing_number'], c['cable'], c['remark']]
+            for drawing_set in (SET_405, SET_393) for r in result['extracts'][drawing_set] for c in r['cables']]
+    return pd.DataFrame(rows, columns=EXTRACT_COLUMNS)
+
+
+def sheet_plan(result):
+    """出力する全シートを Excel と同じ順で `[(シート名, DataFrame, 比較の行 または None), ...]` にする。
+
+    `All Diff` と `<グループ名> Diff` は第3要素に比較の行（`compare_cables()` の結果）を持つ（Excel では行を区分で色分けして書く）。
+    """
+    compare = result['compare']
+    group_names = group_sheet_names([g['name'] for g in compare['groups']], reserved=FIXED_SHEET_NAMES)
     frames = {SUMMARY_SHEET: summary_frame, CHECK_SHEET: check_frame, DETAIL_SHEET: detail_frame,
-              WIRE_CHECK_SHEET: wire_check_frame, LIST_SHEET: list_frame, WIRE_SHEET: wire_frame, CONN_SHEET: conn_frame,
-              SCHEMATIC_SHEET: schematic_frame, PATTERN_SHEET: pattern_frame, TEXT_SHEET: text_frame}
-    return [(name, frames[name](result)) for name in SHEET_NAMES]
+              WIRE_CHECK_SHEET: wire_check_frame, INDEX_SHEET: index_frame, EXTRACT_SHEET: extract_frame,
+              LIST_SHEET: list_frame, WIRE_SHEET: wire_frame, CONN_SHEET: conn_frame, SCHEMATIC_SHEET: schematic_frame,
+              PATTERN_SHEET: pattern_frame, TEXT_SHEET: text_frame}
+    compare_sheets = [(ALL_SHEET, compare['rows'])] + [(n, g['rows']) for n, g in zip(group_names, compare['groups'])]
+    plan = []
+    for name in FIXED_SHEET_NAMES:
+        plan.append((name, frames[name](result), None))
+        if name == EXTRACT_SHEET:
+            plan += [(sheet, compare_frame(rows), rows) for sheet, rows in compare_sheets]
+    return plan
+
+
+def preview_sheets(result):
+    """出力する Excel の全シートを、Excel と同じ順で `[(シート名, DataFrame), ...]` にする（`sheet_plan()` から）。"""
+    return [(name, frame) for name, frame, _ in sheet_plan(result)]
 
 
 # ---------------------------------------------------------------- Excel
 
 def build_workbook(result):
-    """`check_consistency()` の結果から Excel のバイト列を作る（シートは `preview_sheets()`）。"""
+    """`run_check()` の結果から Excel のバイト列を作る（シートは `sheet_plan()`＝`preview_sheets()` と同じ）。"""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         book = writer.book
@@ -205,9 +267,13 @@ def build_workbook(result):
         sym_fmts = {s: book.add_format({'bg_color': bg, 'font_color': fg, 'align': 'center'}) for s, (bg, fg) in SYMBOL_COLORS.items()}
         sym_fmts[NA] = book.add_format({'align': 'center'})
         row_fmts = {s: book.add_format({'bg_color': bg, 'font_color': fg}) for s, (bg, fg) in SYMBOL_COLORS.items()}
-        for name, frame in preview_sheets(result):
+        compare_fmts = status_formats(book)
+        for name, frame, compare_rows in sheet_plan(result):
             if name == CHECK_SHEET:
                 _write_check_sheet(writer, result, frame, header_fmt, sym_fmts)
+                continue
+            if compare_rows is not None:
+                write_compare_sheet(writer, name, compare_rows, header_fmt, compare_fmts)
                 continue
             frame.to_excel(writer, sheet_name=name, index=False)
             ws = writer.sheets[name]

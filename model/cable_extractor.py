@@ -1,11 +1,10 @@
-"""展開接続図の DXF からケーブル番号を抽出するモデル層（streamlit 非依存）。
+"""展開接続図・ケーブル製作図の DXF からケーブル番号を抽出するモデル層（streamlit 非依存）。
 
 ケーブル番号は `W No.M39001` 形式のラベルから拾う。ラベル抽出自体は共有の
 `extract_labels.py`（正本は DXF-extract-labels）を無変更で使う。
 """
 import os
 import re
-import tempfile
 import unicodedata
 
 from .extract_labels import extract_labels
@@ -124,29 +123,3 @@ def extract_cables(dxf_path, original_filename):
         'subtitle': info.get('subtitle') or '',
         'cables': find_cables(labels),
     }
-
-
-def extract_from_uploads(items, progress=None):
-    """アップロードされたファイル群を処理する。
-
-    Args:
-        items: [(元のファイル名, bytes), ...]。呼び出し側でフィルタ・同名除去済みであること。
-        progress: 省略可。`progress(完了数, 全体数, ファイル名)` を各ファイルの処理前に呼ぶ。
-
-    Returns:
-        (結果のリスト, エラーのリスト)。エラーは [(ファイル名, メッセージ), ...]。
-        1つのファイルが壊れていても残りは処理を続ける。
-    """
-    results, errors = [], []
-    for i, (name, data) in enumerate(items):
-        if progress:
-            progress(i, len(items), name)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, 'input.dxf')
-            with open(path, 'wb') as f:
-                f.write(data)
-            try:
-                results.append(extract_cables(path, name))
-            except Exception as e:  # noqa: BLE001 - 壊れた DXF 1件で全体を止めない
-                errors.append((name, f'{type(e).__name__}: {e}'))
-    return results, errors

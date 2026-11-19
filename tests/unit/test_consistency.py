@@ -7,6 +7,7 @@
 展開接続図は `with_schematic()` で足す（接続図パターン EE****-610-**。図番 EE6892-610-01B）。
 """
 import copy
+import os
 
 import pytest
 
@@ -47,7 +48,7 @@ def wire_row(cable=CABLE, n=(1, 2), lines1=('RACK', 'TBR1B'), lines2=('ALS1',), 
 
 
 def drawing(name, **kw):
-    d = {'drawing_number': name, 'no_text': False, 'kinds': [], 'list_rows': [], 'wire_rows': [],
+    d = {'drawing_number': name, 'set': '393', 'no_text': False, 'kinds': [], 'list_rows': [], 'wire_rows': [],
          'wire_notes': [], 'fab_wire_numbers': set(), 'fab_notes': [], 'fab_texts': [], 'fab_text': '',
          'fab_conns': [], 'schematic': None}
     d.update(kw)
@@ -103,7 +104,7 @@ def with_schematic(drawings, wires=None, title='', occ=None, row=None, name=SCH_
         by_name(ds, FAB_NAME)['fab_notes'] = []
     by_name(ds, LIST_NAME)['list_rows'][0].update({'接続図パターン': pattern, **(row or {})})
     occs = [occ] if occ is not None else [occurrence(standard_wires() if wires is None else wires, **occ_kw)]
-    ds.append(drawing(name, kinds=['展開接続図'], schematic={'title': title, 'error': '', 'no_text': False,
+    ds.append(drawing(name, set='405', kinds=['展開接続図'], schematic={'title': title, 'error': '', 'no_text': False,
                                                         'region_error': '', 'occurrences': occs}))
     return ds
 
@@ -650,12 +651,12 @@ REF_TARGET = 'EE6892-405-08A'
 
 
 def test_pattern_resolutions_include_references_written_in_the_schematic():
-    """展開接続図の図中の `(-405-08)` は、パターンの解決に行として足す（頭の英字2・数字4と末尾の改訂記号は任意。備考に参照元の文字）。"""
+    """展開接続図の図中の `(-405-08)` は、図番パターン照合に行として足す（頭の英字2・数字4と末尾の改訂記号は任意。備考に参照元の文字）。"""
     ds = with_schematic(build())
     by_name(ds, SCH_NAME)['schematic']['refs'] = [
         {'pattern': '-405-08', 'text': 'to POWER LINE (-405-08)'}, {'pattern': '-405-08', 'text': 'XRLS1 (-405-08)'},
         {'pattern': '-300-01', 'text': 'DO21-24 (-300-01 1/2)'}]
-    ds.append(drawing(REF_TARGET))
+    ds.append(drawing(REF_TARGET, set='405'))
     rows = {r['パターン']: r for r in C.pattern_resolutions(ds) if r['参照元図面種別'] == REF}
     assert list(rows) == ['-405-08', '-300-01']                   # 同じパターンは1行（備考に参照元の文字をまとめる）
     hit = rows['-405-08']
@@ -670,8 +671,8 @@ def test_references_are_read_only_from_schematics_and_do_not_change_the_check():
     plain = with_schematic(build())
     ds = copy.deepcopy(plain)
     by_name(ds, SCH_NAME)['schematic']['refs'] = [{'pattern': '-405-08', 'text': 'to X (-405-08)'}]
-    ds.append(drawing(REF_TARGET))
-    plain.append(drawing(REF_TARGET))
+    ds.append(drawing(REF_TARGET, set='405'))
+    plain.append(drawing(REF_TARGET, set='405'))
     assert not [r for r in C.pattern_resolutions(plain) if r['参照元図面種別'] == REF]    # refs が無い・読んでいない図面からは出ない
     a, b = check_consistency(plain), check_consistency(ds)
     assert (a['rows'], a['details'], a['wires']) == (b['rows'], b['details'], b['wires'])
@@ -680,27 +681,38 @@ def test_references_are_read_only_from_schematics_and_do_not_change_the_check():
 
 def test_schematic_targets_are_only_drawings_pointed_at_by_the_list(monkeypatch):
     ds = with_schematic(build())
-    ds.append(drawing('EE7777-700-01A'))
+    ds.append(drawing('EE7777-700-01A', set='405'))
     assert C.schematic_targets(ds) == [SCH_NAME]
 
 
-def test_schematic_targets_skip_393_drawings_that_the_pattern_also_matches():
-    """接続図パターン `EE****-610-**` は、同じ `-610-` を持つ 393 の図面（線番設定表など）にも当たる。393 の表が見つかった図面は
-    展開接続図として読まない（読むと、393 の図面にあるケーブル番号の文字が展開接続図の出現として数えられる）。"""
+def test_patterns_are_resolved_inside_their_own_set_of_drawings():
+    """守るもの: 接続図パターン `EE****-610-**` は、同じ `-610-` を持つ 393 のセットの図面（線番設定表など）には当たらず、展開接続図（405 のセット）だけに当たる。
+    逆に、製作図パターンは 405 のセットの図面に当たらない（セットを分けて上げるので、名前が似ていても取り違えない）。"""
     ds = with_schematic(build())
     ds.append(drawing('EE3298-610-02A', kinds=['線番設定表']))
     ds.append(drawing('EE3298-610-03A', kinds=['ケーブル製作図']))
     ds.append(drawing('EE3298-610-04A', kinds=['ケーブル一覧表']))
+    ds.append(drawing('EE9999-534-07A', set='405'))          # 一覧表の製作図パターン EE****-534-07 に名前が合う 405 の図面
     assert C.schematic_targets(ds) == [SCH_NAME]
+    rows = C.pattern_resolutions(ds)
+    (sch,) = [r for r in rows if (r['図面種別'], r['参照元図面種別']) == ('展開接続図', '一覧表')]
+    assert (sch['件数'], sch['当たった図面']) == (1, SCH_NAME)
+    (fab,) = [r for r in rows if (r['図面種別'], r['参照元図面種別'], r['パターン']) == ('製作図', '一覧表', 'EE****-534-07')]
+    assert (fab['件数'], fab['当たった図面']) == (1, FAB_NAME)
 
 
-def test_analyze_uploads_reads_schematics_in_a_second_stage_only_for_pointed_files(monkeypatch):
+def fake_extract(path, name):
+    return {'drawing_number': os.path.splitext(name)[0], 'title': '', 'subtitle': '', 'cables': []}
+
+
+def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last_stage(monkeypatch):
+    """守るもの: 393 は抽出＋393 の読み取り、405 は抽出だけ、その後に一覧表が指す 405 の図面だけを展開接続図として読む。
+    進捗の段階の順は 393 → 405 の抽出 → 展開接続図の読み取り。"""
     calls = []
-    plain = lambda stem: drawing(stem, kinds=[])  # noqa: E731
 
     def fake_analyze(path, name):
         calls.append(('393', name))
-        d = plain(name)
+        d = drawing(name, kinds=[])
         if name == LIST_NAME:
             d['kinds'] = ['ケーブル一覧表']
             d['list_rows'] = [list_row(接続図パターン='EE****-610-**')]
@@ -712,27 +724,78 @@ def test_analyze_uploads_reads_schematics_in_a_second_stage_only_for_pointed_fil
 
     monkeypatch.setattr(C, 'analyze_drawing', fake_analyze)
     monkeypatch.setattr(C, 'analyze_schematic', fake_schematic)
+    monkeypatch.setattr(C, 'extract_cables', fake_extract)
     progress = []
-    items = [(f'{n}.dxf', b'x') for n in (LIST_NAME, SCH_NAME, 'EE7777-700-01A')]
-    drawings, errors = C.analyze_uploads(items, progress=lambda *a: progress.append(a))
-    assert errors == [] and [c for c in calls if c[0] == '405'] == [('405', SCH_NAME)]
+    items_405 = [(f'{n}.dxf', b'x') for n in (SCH_NAME, 'EE7777-700-01A')]
+    items_393 = [(f'{n}.dxf', b'x') for n in (LIST_NAME, 'EE8888-800-01A')]
+    drawings, extracts, errors = C.analyze_uploads(items_405, items_393, progress=lambda *a: progress.append(a))
+    assert errors == [] and calls == [('393', LIST_NAME), ('393', 'EE8888-800-01A'), ('405', SCH_NAME)]
+    assert {d['drawing_number']: d['set'] for d in drawings} == {
+        LIST_NAME: '393', 'EE8888-800-01A': '393', SCH_NAME: '405', 'EE7777-700-01A': '405'}
     sch = by_name(drawings, SCH_NAME)
     assert sch['schematic']['title'] == 't' and C.KIND_SCHEMATIC in sch['kinds']
-    assert by_name(drawings, 'EE7777-700-01A')['schematic'] is None
-    assert [p[3] for p in progress] == [C.PHASE_DRAWINGS] * 3 + [C.PHASE_SCHEMATIC]
+    assert by_name(drawings, 'EE7777-700-01A')['schematic'] is None       # 一覧表が指さない 405 は読まない
+    assert [r['drawing_number'] for r in extracts['405']] == [SCH_NAME, 'EE7777-700-01A']     # 図番順
+    assert [r['drawing_number'] for r in extracts['393']] == [LIST_NAME, 'EE8888-800-01A']
+    assert [p[3] for p in progress] == [C.PHASE_DRAWINGS] * 2 + [C.PHASE_EXTRACT] * 2 + [C.PHASE_SCHEMATIC]
     assert progress[-1][:3] == (0, 1, SCH_NAME)
+    assert [p[:2] for p in progress[:4]] == [(0, 2), (1, 2), (0, 2), (1, 2)]
 
 
-def test_analyze_uploads_keeps_going_when_a_schematic_fails(monkeypatch):
-    monkeypatch.setattr(C, 'analyze_drawing', lambda path, name: drawing(
-        name, list_rows=[list_row(接続図パターン='EE****-610-**')] if name == LIST_NAME else []))
+def test_analyze_uploads_keeps_going_when_a_file_or_a_schematic_fails(monkeypatch):
+    """守るもの: 壊れた1件（抽出か読み取りのどちらかが失敗）は図面にも抽出結果にも入らずエラーになり、残りは続く。
+    展開接続図の読み取りだけが失敗した 405 は、抽出結果と図面には残り、エラーになる。"""
+    def analyze(path, name):
+        if name == 'EE0001-393-01A':
+            raise ValueError('broken 393')
+        return drawing(name, list_rows=[list_row(接続図パターン='EE****-610-**')] if name == LIST_NAME else [])
+
+    def extract(path, name):
+        if name.startswith('EE0002-405-01A'):
+            raise ValueError('broken 405')
+        return fake_extract(path, name)
 
     def boom(path, name):
-        raise RuntimeError('broken')
+        raise RuntimeError('broken schematic')
 
+    monkeypatch.setattr(C, 'analyze_drawing', analyze)
+    monkeypatch.setattr(C, 'extract_cables', extract)
     monkeypatch.setattr(C, 'analyze_schematic', boom)
-    drawings, errors = C.analyze_uploads([(f'{LIST_NAME}.dxf', b'x'), (f'{SCH_NAME}.dxf', b'x')])
-    assert len(drawings) == 2 and [e[0] for e in errors] == [f'{SCH_NAME}.dxf'] and 'RuntimeError' in errors[0][1]
+    drawings, extracts, errors = C.analyze_uploads(
+        [(f'{SCH_NAME}.dxf', b'x'), ('EE0002-405-01A.dxf', b'x')],
+        [(f'{LIST_NAME}.dxf', b'x'), ('EE0001-393-01A.dxf', b'x')])
+    assert sorted(d['drawing_number'] for d in drawings) == sorted([LIST_NAME, SCH_NAME])
+    assert [r['drawing_number'] for r in extracts['393']] == [LIST_NAME] and [r['drawing_number'] for r in extracts['405']] == [SCH_NAME]
+    assert sorted(e[0] for e in errors) == ['EE0001-393-01A.dxf', 'EE0002-405-01A.dxf', f'{SCH_NAME}.dxf']
+    assert by_name(drawings, SCH_NAME)['schematic'] is None
+
+
+def test_schematic_without_text_marks_the_drawing_as_having_no_text(monkeypatch):
+    """守るもの: 展開接続図として読んだ結果が「文字が無い」なら、図面の no_text が立つ（画面の警告・Summary の「文字の無い図面」に出る）。"""
+    monkeypatch.setattr(C, 'analyze_drawing', lambda path, name: drawing(
+        name, list_rows=[list_row(接続図パターン='EE****-610-**')]))
+    monkeypatch.setattr(C, 'extract_cables', fake_extract)
+    monkeypatch.setattr(C, 'analyze_schematic', lambda path, name: {
+        'title': '', 'error': '', 'no_text': True, 'region_error': '', 'occurrences': [], 'refs': []})
+    drawings, _extracts, errors = C.analyze_uploads([(f'{SCH_NAME}.dxf', b'x')], [(f'{LIST_NAME}.dxf', b'x')])
+    assert errors == [] and by_name(drawings, SCH_NAME)['no_text'] and not by_name(drawings, LIST_NAME)['no_text']
+
+
+def test_run_check_adds_extracts_and_the_cable_comparison_to_the_result(monkeypatch):
+    """守るもの: run_check は照合の結果に、抽出結果（セットごと）とケーブル番号の比較（全体・グループ別）を足す。405 だけでも動く。"""
+    monkeypatch.setattr(C, 'analyze_drawing', lambda path, name: drawing(name))
+    monkeypatch.setattr(C, 'extract_cables', lambda path, name: {
+        'drawing_number': os.path.splitext(name)[0], 'title': 'T', 'subtitle': '',
+        'cables': [{'cable': 'M39001', 'remark': ''}]})
+    result, errors = C.run_check([(f'{SCH_NAME}.dxf', b'x')], [('EE0001-393-01A.dxf', b'x')])
+    assert errors == [] and set(result['extracts']) == {'405', '393'}
+    assert [(r['cable'], r['drawings_405'], r['drawings_393']) for r in result['compare']['rows']] == [
+        ('M39001', [SCH_NAME], ['EE0001-393-01A'])]
+    assert [g['name'] for g in result['compare']['groups']] == ['T']
+    result, errors = C.run_check([(f'{SCH_NAME}.dxf', b'x')], [])
+    assert errors == [] and result['rows'] == [] and result['extracts']['393'] == []
+    assert [r['drawings_393'] for r in result['compare']['rows']] == [[]] and result['compare']['groups'] == []
+    assert result['unused'] == [SCH_NAME]                                  # 一覧表が無いので、どの接続図パターンにも指されない
 
 
 def test_symbol_severity_order_is_x_then_unread_then_weak_then_ok_then_na():

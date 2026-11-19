@@ -11,7 +11,7 @@
     実現性検討 README の「71枚」は、DWG から変換した6件を足す前の数え方
   - 製作図の注記の線番設定表パターン 18件、うち17件が図面1件に当たる（`-678-04` は0件）。文字の無い図面は無い
   - 代表例: M65206（一覧表 EE6892-365-61C）→ 製作図 EE3298-534-07D → 線番設定表 EE3298-634-07E。#7 は `*1,*2` と線番1・2 で OK
-  - 537-85C の見出しが逆の表は、製作図の接続の明細に図面どおり出る（読み取りは図面のとおり）
+  - 537-85C の見出しが逆の表は、製作図の接続表の明細に図面どおり出る（読み取りは図面のとおり）
 照合の結果の分布は、読み取りの件数と違い「一覧表と図面の書き方の差」を含む（#2 は一覧表の部品種別・ケーブル種類が
 図面に文字どおりには無い、#6 は一覧表がケーブル単位・線番設定表が電線単位で粒度が違う。どちらも各 README に記録済み）。
 分布が変わったら、変更の意図を確かめてから更新する。
@@ -40,7 +40,7 @@ import os
 import pandas as pd
 import pytest
 
-from model.consistency import ITEM_COLUMNS, SYMBOLS, analyze_drawing, analyze_uploads, check_consistency, pattern_resolutions
+from model.consistency import ITEM_COLUMNS, SYMBOLS, analyze_drawing, pattern_resolutions, run_check
 from model.consistency_output import build_workbook, preview_sheets
 
 pytestmark = pytest.mark.slow
@@ -89,19 +89,20 @@ def drawings():
 
 
 @pytest.fixture(scope='module')
-def uploaded():
-    """393（106件）と 405（23件）を一緒にアップロードしたときの図面の dict（`analyze_uploads()`。2段で読む）。"""
-    paths = (sorted(glob.glob(os.path.join(DATA_DIR, '*.dxf'))) + sorted(glob.glob(os.path.join(DATA_405_DIR, '*.dxf'))))
-    assert len(paths) == 129
-    items = [(os.path.basename(p), open(p, 'rb').read()) for p in paths]
-    drawings, errors = analyze_uploads(items)
+def result():
+    """393（106件）と 405（23件）を別のセットとしてアップロードしたときの結果（`run_check()`。抽出・2段の読み取り・照合・比較）。"""
+    def items(folder):
+        return [(os.path.basename(p), open(p, 'rb').read()) for p in sorted(glob.glob(os.path.join(folder, '*.dxf')))]
+    items_405, items_393 = items(DATA_405_DIR), items(DATA_DIR)
+    assert (len(items_405), len(items_393)) == (23, 106)
+    result, errors = run_check(items_405, items_393)
     assert errors == []
-    return drawings
+    return result
 
 
 @pytest.fixture(scope='module')
-def result(uploaded):
-    return check_consistency(uploaded)
+def uploaded(result):
+    return result['drawings']
 
 
 def by_name(drawings, name):
@@ -148,8 +149,17 @@ def test_note_patterns_resolve_as_in_the_feasibility_study(drawings):
         ('製作図', '一覧表'), ('展開接続図', '一覧表'), ('線番設定表', '製作図の注記'), ('製作図', '線番設定表の注記')}   # 2段目の前なので図中の参照は無い
 
 
+def test_schematic_patterns_are_resolved_in_the_405_set_only(uploaded):
+    """守るもの: 一覧表の接続図パターンは 405 のセットだけで解決する。`EE****-634-**`・`-637-**`・`-639-**` は 393 のセットの線番設定表・製作図
+    （EE3298-634-07E・637-02E/03R/50C・639-02G/42B/43L）にも名前が合うが、当たるのは展開接続図 1件ずつ（以前は 2・4・4 件）。"""
+    rows = {r['パターン']: r for r in pattern_resolutions(uploaded) if (r['図面種別'], r['参照元図面種別']) == ('展開接続図', '一覧表')}
+    assert {p: rows[p]['当たった図面'] for p in ('EE****-634-**', 'EE****-637-**', 'EE****-639-**')} == {
+        'EE****-634-**': 'EE6892-634-01C', 'EE****-637-**': 'EE6888-637-01A', 'EE****-639-**': 'EE6888-639-01A'}
+    assert all(r['件数'] <= 1 for r in rows.values())
+
+
 def test_references_written_in_schematics_are_listed_in_the_pattern_sheet(uploaded):
-    """展開接続図の図中の `to POWER LINE (SYSTEM I/F BOX) (-405-08)` などの参照を、パターンの解決に25行（参照元の図面×パターン。`(-405-01,02)` は2つに分ける）足す。
+    """展開接続図の図中の `to POWER LINE (SYSTEM I/F BOX) (-405-08)` などの参照を、図番パターン照合に25行（参照元の図面×パターン。`(-405-01,02)` は2つに分ける）足す。
     実データでは 17 ファイル中、2段目で読んだ 14 枚から出て（EE6886-699-01A・EE6892-405-17A・EE6892-514-01B は読まない）、`-405-08` は EE6892-405-08A に当たる（9枚）。アップロードに無い図面は0件。
     照合の記号は変えず、参照で指されただけの図面は「使っていない図面」のまま（EE6892-405-17A 等）。"""
     res = pattern_resolutions(uploaded)
@@ -269,9 +279,17 @@ def test_unit_evidence_kinds_all_occur_in_the_real_data(result):
 
 def test_excel_matches_preview_and_has_all_rows(result):
     sheets = dict(preview_sheets(result))
+    # シートの並びと行数。All Diff＝ケーブル 217（両方108・展開接続図だけ2・製作図だけ107）、グループは 393 のサブタイトル優先の2つ
+    # （405 全体と突き合わせるので、グループの行＝そのグループのケーブル＋405 にだけあるケーブル）、図面一覧＝129図面、ケーブル抽出＝405 の110＋393 の267
     assert {k: len(v) for k, v in sheets.items()} == {
-        'Summary': 24, '整合性チェック': 228, '照合明細': 4144, '芯線の照合': 1101, 'ケーブル一覧表': 134, '線番設定表': 403,
-        '製作図の接続': 456, '展開接続図': 628, 'パターンの解決': 174, '製作図の文字': 3852}
+        'Summary': 31, '図面一覧': 129, 'ケーブル抽出': 377, 'All Diff': 217, 'ケーブル一覧表 Diff': 124, '線番設定表 Diff': 205,
+        '整合性チェック': 228, '照合明細': 4144, '芯線照合': 1101, '展開接続図': 628, 'ケーブル一覧表': 134, '線番設定表': 403,
+        '製作図の接続表': 456, '製作図の文字': 3852, '図番パターン照合': 174}
+    assert list(sheets) == ['Summary', '図面一覧', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
+                            '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']
+    index = sheets['図面一覧']
+    assert index.groupby('セット').size().to_dict() == {'展開接続図（405）': 23, 'ケーブル製作図（393）': 106}
+    assert (index['備考'] == '照合に使っていない').sum() == 7 and index[index['備考'] != '照合に使っていない']['備考'].eq('').all()
     wb = build_workbook(result)
     book = pd.read_excel(io.BytesIO(wb), sheet_name=None, keep_default_na=False)
     assert list(book) == list(sheets)

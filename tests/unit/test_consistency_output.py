@@ -1,7 +1,7 @@
 """整合性チェックの Excel・プレビュー（consistency_output.py）の合成データテスト。
 
 守るもの: シート名と順、プレビューと Excel の一致、整合性チェックの2段見出し・記号の色・照合明細へのリンク、
-照合明細の行色、根拠のシート（パターンの解決・製作図の文字・展開接続図の読み取り・芯線の照合）、Arrow への変換。
+照合明細の行色、根拠のシート（図番パターン照合・製作図の文字・展開接続図の読み取り・芯線照合）、ケーブル番号の抽出・比較のシート、Arrow への変換。
 """
 import io
 import re
@@ -11,9 +11,10 @@ import pandas as pd
 import pytest
 
 from model import consistency_output as out
+from model.cable_compare import compare_extracts
 from model.consistency import ITEM_COLUMNS, ITEMS, check_consistency, item_label
 from model.consistency_output import (
-    CHECK_COLUMNS, DETAIL_COLUMNS, SHEET_NAMES, build_workbook, preview_sheets, summary_frame,
+    CHECK_COLUMNS, DETAIL_COLUMNS, FIXED_SHEET_NAMES, build_workbook, preview_sheets, summary_frame,
 )
 from tests.unit.test_consistency import (
     CABLE, FAB_NAME, LIST_NAME, SCH_NAME, WIRE_NAME, by_name, build, wire_row, with_schematic,
@@ -35,7 +36,22 @@ def make_result():
                     'ラベル': '(WH)', '削除されたラベル': ''}])
     by_name(drawings, WIRE_NAME)['wire_rows'].append(wire_row(cable='M99999', n=(1,)))
     drawings.append(drawing_without_kind())
-    return check_consistency(drawings)
+    return with_extracts(check_consistency(drawings), {
+        '405': [extract(SCH_NAME, [CABLE, 'M70001'], title='ELECTRICAL SCHEMATIC DIAGRAM')],
+        '393': [extract('EE0002-002-02A', []), extract(FAB_NAME, []), extract(WIRE_NAME, [CABLE, 'M99999'], title='線番設定表'),
+                extract(LIST_NAME, [CABLE], subtitle='ケーブル一覧表')]})            # 図番順（`analyze_uploads` と同じ）
+
+
+def extract(name, cables, title='', subtitle=''):
+    return {'drawing_number': name, 'title': title, 'subtitle': subtitle,
+            'cables': [{'cable': c, 'remark': f'備考{c}'} for c in cables]}
+
+
+def with_extracts(result, extracts):
+    """照合の結果に、`run_check()` と同じ形で抽出結果とケーブル番号の比較を足す。"""
+    result['extracts'] = extracts
+    result['compare'] = compare_extracts(extracts['405'], extracts['393'])
+    return result
 
 
 def drawing_without_kind():
@@ -52,7 +68,10 @@ def read_check_sheet(result):
 
 def test_sheets_are_in_the_documented_order_and_columns():
     sheets = dict(preview_sheets(make_result()))
-    assert list(sheets) == SHEET_NAMES
+    assert list(sheets) == [
+        'Summary', '図面一覧', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
+        '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']
+    assert [n for n in sheets if n in FIXED_SHEET_NAMES] == FIXED_SHEET_NAMES                 # 固定のシートは並びを保つ
     assert list(sheets[out.CHECK_SHEET].columns) == CHECK_COLUMNS == [
         'ケーブル番号', '一覧表の図番', '一覧表の行', '不整合数', '要確認数', *ITEM_COLUMNS]
     assert ITEM_COLUMNS[0] == '図面の対応｜一覧表' and ITEM_COLUMNS[-1] == '芯線｜色'
@@ -102,10 +121,15 @@ def test_summary_counts_symbols_per_item_and_drawing_kinds():
     assert summary.loc['図面: ケーブル一覧表', '件数'] == 1
     assert summary.loc['図面: 線番設定表', '件数'] == 1
     assert summary.loc['図面: ケーブル製作図（線番/PIN の表がある）', '件数'] == 1
-    assert summary.loc['図面: 展開接続図', '件数'] == 1
+    assert summary.loc['図面: 展開接続図（照合に使った）', '件数'] == 1
     assert summary.loc['図面: 文字の無い図面', '件数'] == 0
     assert summary.loc['図面: 照合に使っていない図面', '件数'] == 1
     assert summary.loc['図面: 全体', '件数'] == 5
+    assert summary.loc['図面: 展開接続図（405）のセット', '件数'] == 1 and summary.loc['図面: ケーブル製作図（393）のセット', '件数'] == 4
+    # ケーブル番号の比較: 405 に CABLE・M70001、393 に CABLE・M99999
+    assert summary.loc['ケーブル番号: 展開接続図', '件数'] == 2 and summary.loc['ケーブル番号: ケーブル製作図', '件数'] == 2
+    assert summary.loc['ケーブル番号: 両方にある', '件数'] == 1
+    assert summary.loc['ケーブル番号: 展開接続図だけ', '件数'] == 1 and summary.loc['ケーブル番号: ケーブル製作図だけ', '件数'] == 1
 
 
 # ---------------------------------------------------------------- 整合性チェックシート（Excel）
@@ -155,7 +179,7 @@ def test_too_many_cells_for_hyperlinks_fall_back_to_plain_symbols(monkeypatch):
     assert ws['F3'].value == '○' and ws['F3'].hyperlink is None
 
 
-# ---------------------------------------------------------------- 照合明細・芯線の照合・根拠のシート
+# ---------------------------------------------------------------- 照合明細・芯線照合・根拠のシート
 
 def test_detail_rows_are_colored_by_judgment():
     ws = openpyxl.load_workbook(io.BytesIO(build_workbook(make_result())))[out.DETAIL_SHEET]
@@ -207,11 +231,69 @@ def test_evidence_sheets_show_pattern_resolution_and_fab_text():
     assert sheets[out.TEXT_SHEET].values.tolist() == [[FAB_NAME, t] for t in ['R2-3.5', 'CONN', 'ACCESSORY CABLE']]
 
 
+# ---------------------------------------------------------------- ケーブル番号の抽出と比較のシート
+
+def test_index_sheet_lists_the_drawings_of_both_sets_with_titles_kinds_and_remarks():
+    """守るもの: 図面一覧は展開接続図のセット → ケーブル製作図のセットの順（それぞれ図番順）で、タイトル・図面の種類・ケーブル数・備考を持つ。"""
+    index = dict(preview_sheets(make_result()))[out.INDEX_SHEET]
+    assert list(index.columns) == out.INDEX_COLUMNS
+    assert index['図番'].tolist() == [SCH_NAME, 'EE0002-002-02A', FAB_NAME, WIRE_NAME, LIST_NAME]
+    sch = index.iloc[0]
+    assert (sch['セット'], sch['タイトル'], sch['図面の種類'], sch['ケーブル数']) == (
+        '展開接続図（405）', 'ELECTRICAL SCHEMATIC DIAGRAM', '展開接続図', 2)
+    lst = index[index['図番'] == LIST_NAME].iloc[0]
+    assert (lst['セット'], lst['サブタイトル'], lst['図面の種類'], lst['ケーブル数']) == ('ケーブル製作図（393）', 'ケーブル一覧表', 'ケーブル一覧表', 1)
+    assert index[index['図番'] == 'EE0002-002-02A'].iloc[0]['備考'] == '照合に使っていない'
+    assert (index['備考'] == '').sum() == 4
+
+
+def test_index_sheet_marks_drawings_without_text():
+    result = make_result()
+    by_name(result['drawings'], WIRE_NAME)['no_text'] = True
+    index = dict(preview_sheets(result))[out.INDEX_SHEET]
+    assert index[index['図番'] == WIRE_NAME].iloc[0]['備考'] == '文字が無い'
+
+
+def test_extract_sheet_lists_every_cable_of_both_sets_with_remarks():
+    extract_sheet = dict(preview_sheets(make_result()))[out.EXTRACT_SHEET]
+    assert list(extract_sheet.columns) == out.EXTRACT_COLUMNS
+    assert extract_sheet.values.tolist() == [
+        ['展開接続図（405）', SCH_NAME, CABLE, f'備考{CABLE}'], ['展開接続図（405）', SCH_NAME, 'M70001', '備考M70001'],
+        ['ケーブル製作図（393）', WIRE_NAME, CABLE, f'備考{CABLE}'], ['ケーブル製作図（393）', WIRE_NAME, 'M99999', '備考M99999'],
+        ['ケーブル製作図（393）', LIST_NAME, CABLE, f'備考{CABLE}']]
+
+
+def test_compare_sheets_are_all_diff_and_one_per_group_after_the_extract_sheet():
+    """守るもの: All Diff と、393 のサブタイトル優先のグループごとの比較シートが、ケーブル抽出のあと・整合性チェックの前に入り、中身は今の比較と同じ列・値。"""
+    sheets = dict(preview_sheets(make_result()))
+    assert list(sheets)[2:7] == ['ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック']
+    assert sheets['All Diff'].values.tolist() == [
+        [CABLE, SCH_NAME, f'{WIRE_NAME}、{LIST_NAME}'], ['M70001', SCH_NAME, ''], ['M99999', '', WIRE_NAME]]
+    assert list(sheets['All Diff'].columns) == ['ケーブル番号', '展開接続図の図番', 'ケーブル製作図の図番']
+    assert sheets['ケーブル一覧表 Diff'].values.tolist() == [[CABLE, SCH_NAME, LIST_NAME], ['M70001', SCH_NAME, '']]
+
+
+def test_compare_sheets_are_colored_by_status_in_the_workbook():
+    """守るもの: Excel の比較シートの行色（405だけ＝ピンク・393だけ＝青・両方＝緑）。"""
+    ws = openpyxl.load_workbook(io.BytesIO(build_workbook(make_result())))['All Diff']
+    assert [[c.fill.fgColor.rgb[-6:] for c in ws[r]][0] for r in (2, 3, 4)] == ['EAF7EC', 'FEF1F5', 'EAF1FB']
+    assert ws.freeze_panes == 'A2'
+
+
+def test_group_sheet_names_do_not_collide_with_fixed_sheets():
+    """守るもの: グループ名が固定のシート名と衝突するとき（グループ名が `All` など）は、`_2` を付けて別名にする。"""
+    ds = build()
+    result = with_extracts(check_consistency(ds), {'405': [], '393': [
+        extract(n, [CABLE] if n == LIST_NAME else [], title='All') for n in sorted(d['drawing_number'] for d in ds)]})
+    assert [n for n, _ in preview_sheets(result)][3:5] == ['All Diff', 'All_2 Diff']
+
+
 # ---------------------------------------------------------------- 形の保証
 
 def test_empty_result_still_builds_all_sheets():
-    book = pd.read_excel(io.BytesIO(build_workbook(check_consistency([]))), sheet_name=None)
-    assert list(book) == SHEET_NAMES
+    result = with_extracts(check_consistency([]), {'405': [], '393': []})
+    book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None)
+    assert list(book) == [*FIXED_SHEET_NAMES[:3], 'All Diff', *FIXED_SHEET_NAMES[3:]]
 
 
 def test_every_preview_sheet_converts_to_arrow():

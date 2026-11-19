@@ -197,10 +197,12 @@ def test_schematic_sheet_lists_the_ends_of_every_wire():
 def test_evidence_sheets_show_pattern_resolution_and_fab_text():
     sheets = dict(preview_sheets(make_result()))
     pat = sheets[out.PATTERN_SHEET]
+    # 「図面種別」（パターンが指す図面）と「参照元図面種別」（パターンの書かれた場所）は別の列
+    assert list(pat.columns) == ['図面種別', '参照元図面種別', 'パターン', '参照元の図番', '当たった図面', '件数', '備考']
     row = pat[(pat['パターン'] == 'EE****-534-07') & (pat['参照元の図番'] == LIST_NAME)].iloc[0]
-    assert row['種別'] == '製作図（一覧表）' and row['当たった図面'] == FAB_NAME and row['件数'] == 1
-    assert (pat['種別'] == '線番設定表（製作図の注記）').any() and (pat['当たった図面'] == WIRE_NAME).any()
-    sch = pat[pat['種別'] == '展開接続図（一覧表）'].iloc[0]
+    assert (row['図面種別'], row['参照元図面種別']) == ('製作図', '一覧表') and row['当たった図面'] == FAB_NAME and row['件数'] == 1
+    assert ((pat['図面種別'] == '線番設定表') & (pat['参照元図面種別'] == '製作図の注記')).any() and (pat['当たった図面'] == WIRE_NAME).any()
+    sch = pat[(pat['図面種別'] == '展開接続図') & (pat['参照元図面種別'] == '一覧表')].iloc[0]
     assert sch['当たった図面'] == SCH_NAME
     assert sheets[out.TEXT_SHEET].values.tolist() == [[FAB_NAME, t] for t in ['R2-3.5', 'CONN', 'ACCESSORY CABLE']]
 

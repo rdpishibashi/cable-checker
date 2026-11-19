@@ -141,16 +141,21 @@ def test_note_patterns_resolve_as_in_the_feasibility_study(drawings):
     notes = [p for d in drawings for p in d['fab_notes']]
     assert len(notes) == 18
     res = pattern_resolutions(drawings)
-    assert sorted(r['件数'] for r in res if r['種別'] == '線番設定表（製作図の注記）') == [0] + [1] * 17
-    assert [r['パターン'] for r in res if r['種別'] == '線番設定表（製作図の注記）' and r['件数'] == 0] == ['-678-04']
-    assert all(r['件数'] == 1 for r in res if r['種別'] == '製作図（線番設定表の注記）')   # 17枚すべて1件
+    assert sorted(r['件数'] for r in res if (r['図面種別'], r['参照元図面種別']) == ('線番設定表', '製作図の注記')) == [0] + [1] * 17
+    assert [r['パターン'] for r in res if (r['図面種別'], r['参照元図面種別']) == ('線番設定表', '製作図の注記') and r['件数'] == 0] == ['-678-04']
+    assert all(r['件数'] == 1 for r in res if (r['図面種別'], r['参照元図面種別']) == ('製作図', '線番設定表の注記'))   # 17枚すべて1件
+    assert {(r['図面種別'], r['参照元図面種別']) for r in res} == {
+        ('製作図', '一覧表'), ('展開接続図', '一覧表'), ('線番設定表', '製作図の注記'), ('製作図', '線番設定表の注記')}   # 2段目の前なので図中の参照は無い
 
 
 def test_references_written_in_schematics_are_listed_in_the_pattern_sheet(uploaded):
     """展開接続図の図中の `to POWER LINE (SYSTEM I/F BOX) (-405-08)` などの参照を、パターンの解決に25行（参照元の図面×パターン。`(-405-01,02)` は2つに分ける）足す。
     実データでは 17 ファイル中、2段目で読んだ 14 枚から出て（EE6886-699-01A・EE6892-405-17A・EE6892-514-01B は読まない）、`-405-08` は EE6892-405-08A に当たる（9枚）。アップロードに無い図面は0件。
     照合の記号は変えず、参照で指されただけの図面は「使っていない図面」のまま（EE6892-405-17A 等）。"""
-    rows = [r for r in pattern_resolutions(uploaded) if r['種別'] == '展開接続図（図中の参照）']
+    res = pattern_resolutions(uploaded)
+    assert {(r['図面種別'], r['参照元図面種別']) for r in res} >= {('展開接続図', '図中の参照')}
+    rows = [r for r in res if r['参照元図面種別'] == '図中の参照']
+    assert {r['図面種別'] for r in rows} == {'展開接続図'}
     assert len(rows) == 25
     hits = [r for r in rows if r['件数'] == 1]
     assert len(hits) == 9 and {(r['パターン'], r['当たった図面']) for r in hits} == {('-405-08', 'EE6892-405-08A')}

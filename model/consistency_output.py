@@ -178,7 +178,7 @@ def schematic_frame(result):
 
 
 def pattern_frame(result):
-    columns = ['種別', 'パターン', '参照元の図番', '当たった図面', '件数', '備考']
+    columns = ['図面種別', '参照元図面種別', 'パターン', '参照元の図番', '当たった図面', '件数', '備考']
     return pd.DataFrame([[r[c] for c in columns] for r in pattern_resolutions(result['drawings'])], columns=columns)
 
 

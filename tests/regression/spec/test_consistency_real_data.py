@@ -24,6 +24,14 @@
   #6a 対象なし→NG（`CN PANEL1` 等が一覧表の端末と合わない。637-03R の行と同じ傾向）。
   #0 NG 90→92（線番設定表にだけある M39138・M62015）。#3 の NG は M39038（`-678-04` が0件）だけになった。
 データはフォルダを集合として直接参照する（sample-dxf/README.md 規則4）。
+
+2026-11-19 変更: 整合性チェックを「1ケーブル1行」（一覧表の行ごと）に作り替え、展開接続図（405）の照合を加えた。
+照合の4件（分布・代表例・名指しの NG・Excel）は新しい結果の形（`rows`・`details`・`wires`）で書き直し、405 の23件を
+393 の106件と一緒に `analyze_uploads()` に入れる（一覧表の「接続図パターン」が指す図面だけが2段目で読まれる）。
+読み取りの6件（`drawings` フィクスチャ＝393 だけ）は変えていない。新しい期待値は、移植した 405 の読み取りが試作
+（docs/feasibility/schematic_405/）と一致すること（127件の出現のうち一覧表が指す126件・628芯線で、端の名前・ピン・種類・
+機器の文字・近傍の文字が差0。領域の根拠だけは共有の `_point_in_polygon`〈境界上を内側とする〉で21の端が増えた）を確認して固定した。
+`uploaded` フィクスチャは1分近くかかる（405 を1段目の 393 用の読み取りにもかけるため）。
 """
 import glob
 import io
@@ -32,7 +40,7 @@ import os
 import pandas as pd
 import pytest
 
-from model.consistency import analyze_drawing, check_consistency, pattern_resolutions
+from model.consistency import ITEM_COLUMNS, SYMBOLS, analyze_drawing, analyze_uploads, check_consistency, pattern_resolutions
 from model.consistency_output import build_workbook, preview_sheets
 
 pytestmark = pytest.mark.slow
@@ -40,20 +48,36 @@ pytestmark = pytest.mark.slow
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 DATA_DIR = os.path.join(PROJECT, 'sample-dxf', 'dataset', 'ME25-7103-0_Cu_R1chamber', '393_ケーブル')
+DATA_405_DIR = os.path.join(PROJECT, 'sample-dxf', 'dataset', 'ME25-7103-0_Cu_R1chamber', '405_展開図')
 
-# 照合ごとの (OK, NG, 対象なし)。一覧表の行134（0 は線番設定表にだけあるケーブル92を含む226）
+# 項目ごとの記号の件数 (○, △, ×, ？, －)。全 228 行＝一覧表の行134＋一覧表に無いケーブル94
+# （一覧表の行以外は、一覧表が × で、ほかの項目は －）。部品種別・ケーブル種類の × が多いのは、一覧表の値が図面に文字どおりには
+# 無いため（実現性検討の第3弾に記録済み。BOM 化・汎用図面の「一覧表参照」）。分布が変わったら、変更の意図を確かめてから更新する
 EXPECTED_DISTRIBUTION = {
-    '0 一覧表の記載': (134, 92, 0),
-    '1 製作図の図面': (133, 1, 0),
-    '2 製作図の記載（端末1 部品種別）': (15, 118, 1),
-    '2 製作図の記載（端末2 部品種別）': (17, 104, 13),
-    '2 製作図の記載（ケーブル種類）': (27, 101, 6),
-    '3 線番設定表の図面': (39, 1, 94),
-    '4 線番設定表の記載': (38, 1, 95),
-    '5 線番設定表の製作図': (39, 0, 95),
-    '6a 接続先のユニット名': (17, 21, 96),
-    '6b 接続先の端子台': (0, 9, 125),
-    '7 線番の列': (36, 2, 96),
+    '図面の対応｜一覧表': (134, 0, 94, 0, 0),
+    '図面の対応｜製作図': (133, 0, 1, 0, 94),
+    '図面の対応｜線番設定表': (38, 0, 2, 0, 188),
+    '図面の対応｜展開接続図': (119, 0, 15, 0, 94),
+    '端末1｜ユニット': (28, 38, 16, 35, 111),
+    '端末1｜モジュール': (2, 0, 0, 13, 213),
+    '端末1｜機器符号': (75, 0, 16, 28, 109),
+    '端末1｜部品種別': (15, 0, 118, 0, 95),
+    '端末2｜ユニット': (38, 20, 11, 34, 125),
+    '端末2｜モジュール': (3, 0, 0, 14, 211),
+    '端末2｜機器符号': (66, 0, 11, 29, 122),
+    '端末2｜部品種別': (17, 0, 104, 0, 107),
+    'ケーブル｜種類': (28, 0, 101, 0, 99),
+    'ケーブル｜芯数': (51, 6, 45, 0, 126),
+    '芯線｜線番': (38, 2, 7, 0, 181),
+    '芯線｜PIN': (48, 1, 13, 13, 153),
+    '芯線｜色': (1, 0, 2, 0, 225),
+}
+
+M65206_ROW = {
+    '図面の対応｜一覧表': '○', '図面の対応｜製作図': '○', '図面の対応｜線番設定表': '○', '図面の対応｜展開接続図': '○',
+    '端末1｜ユニット': '○', '端末1｜モジュール': '－', '端末1｜機器符号': '○', '端末1｜部品種別': '○',
+    '端末2｜ユニット': '△', '端末2｜モジュール': '○', '端末2｜機器符号': '○', '端末2｜部品種別': '○',
+    'ケーブル｜種類': '○', 'ケーブル｜芯数': '－', '芯線｜線番': '○', '芯線｜PIN': '○', '芯線｜色': '×',
 }
 
 
@@ -65,8 +89,19 @@ def drawings():
 
 
 @pytest.fixture(scope='module')
-def result(drawings):
-    return check_consistency(drawings)
+def uploaded():
+    """393（106件）と 405（23件）を一緒にアップロードしたときの図面の dict（`analyze_uploads()`。2段で読む）。"""
+    paths = (sorted(glob.glob(os.path.join(DATA_DIR, '*.dxf'))) + sorted(glob.glob(os.path.join(DATA_405_DIR, '*.dxf'))))
+    assert len(paths) == 129
+    items = [(os.path.basename(p), open(p, 'rb').read()) for p in paths]
+    drawings, errors = analyze_uploads(items)
+    assert errors == []
+    return drawings
+
+
+@pytest.fixture(scope='module')
+def result(uploaded):
+    return check_consistency(uploaded)
 
 
 def by_name(drawings, name):
@@ -118,36 +153,110 @@ def test_no_drawing_lacks_text_and_637_02e_is_a_wire_number_table(drawings):
     assert d['kinds'] == ['線番設定表'] and len(d['wire_rows']) == 40 and d['wire_notes'] == ['EE****-537-02']
 
 
-def test_check_distribution_per_check(result):
-    counts = {}
-    for c in result['checks']:
-        counts.setdefault(c['照合'], {'OK': 0, 'NG': 0, '対象なし': 0})[c['結果']] += 1
-    assert {k: tuple(v.values()) for k, v in counts.items()} == EXPECTED_DISTRIBUTION
-    assert len({c['ケーブル番号'] for c in result['checks']}) == 212
+def test_schematics_are_read_only_when_a_list_row_points_at_them(uploaded):
+    """一覧表の接続図パターンが指す 405 の18枚だけが2段目で読まれる。指されない 405（目録・一覧・EE6892-405-17A 等）は読まない。
+    `EE****-637-**` のようなパターンが 393 の線番設定表にも当たっても、393 の表が見つかった図面は読まない。"""
+    read = sorted(d['drawing_number'] for d in uploaded if d['schematic'] is not None)
+    assert len(read) == 18 and all(d.startswith(('EE6', 'EE7')) for d in read)
+    assert not any(n.startswith('EE3298') for n in read)
+    occ = [o for d in uploaded if d['schematic'] for o in d['schematic']['occurrences']]
+    assert len(occ) == 126 and sum(len(o['wires']) for o in occ) == 628
+    assert {h: sum(o['how'] == h for o in occ) for h in ('ellipse', 'capsule', 'via-line', 'single', 'beside', 'none')} == {
+        'ellipse': 42, 'capsule': 13, 'via-line': 25, 'single': 32, 'beside': 14, 'none': 0}
+    assert all('展開接続図' in d['kinds'] for d in uploaded if d['schematic'] is not None)
 
 
-def test_representative_chain_m65206(result):
-    rows = {c['照合']: c for c in result['checks'] if c['ケーブル番号'] == 'M65206'}
-    assert rows['0 一覧表の記載']['一覧表の図番'] == 'EE6892-365-61C'
-    assert rows['1 製作図の図面']['ケーブル製作図の図番'] == 'EE3298-534-07D'
-    assert rows['3 線番設定表の図面']['線番設定表の図番'] == 'EE3298-634-07E'
-    for check in ('1 製作図の図面', '3 線番設定表の図面', '4 線番設定表の記載', '5 線番設定表の製作図', '7 線番の列'):
-        assert rows[check]['結果'] == 'OK', check
-    assert '製作図 *1,*2 / 線番設定表 *1,*2' in rows['7 線番の列']['内容']
+def test_check_distribution_per_item(result):
+    rows = result['rows']
+    assert len(rows) == 228 and sum(bool(r['一覧表の図番']) for r in rows) == 134
+    counts = {c: tuple(sum(r['cells'][c] == s for r in rows) for s in SYMBOLS) for c in ITEM_COLUMNS}
+    assert counts == EXPECTED_DISTRIBUTION
+    assert sum(r['不整合数'] > 0 for r in rows) == 227 and sum(r['要確認数'] > 0 for r in rows) == 44
+    assert len(result['details']) == 4144 and len(result['wires']) == 1101
+    assert result['unused'] == ['EE5207-405A', 'EE5283-300-30D', 'EE5283-393-01B', 'EE6886-699-01A', 'EE6888-660-01A',
+                                'EE6892-405-17A', 'EE6892-514-01B']
 
 
-def test_ng_cases_named_in_the_study(result):
-    """-678-04（0件）は 3 が NG、M65219 の製作図パターン EE****-525-10 は 0件で 1 が NG。"""
-    ng3 = [c for c in result['checks'] if c['照合'] == '3 線番設定表の図面' and c['結果'] == 'NG']
-    assert sorted({c['ケーブル番号'] for c in ng3}) == ['M39038']
-    ng1 = [c for c in result['checks'] if c['照合'] == '1 製作図の図面' and c['結果'] == 'NG']
-    assert [(c['ケーブル番号'], '0件' in c['内容']) for c in ng1] == [('M65219', True)]
+def row_of(result, cable, list_name=None, line=None):
+    (row,) = [r for r in result['rows'] if r['ケーブル番号'] == cable and r['一覧表の図番'] and
+              (list_name is None or r['一覧表の図番'] == list_name) and (line is None or r['一覧表の行'] == line)]
+    return row
+
+
+def basis(result, row, column):
+    return result['details'][row['links'][column]]['判断根拠']
+
+
+def test_representative_row_m65206(result):
+    """M65206（一覧表 EE6892-365-61C 行3）→ 製作図 EE3298-534-07D → 線番設定表 EE3298-634-07E、展開接続図 EE6892-610-01B。
+    端末2 のユニット `ALS1 R1` は領域に無く、機器符号 CN1 のラベルから 33 にあるラベルで △（近傍）。製作図の色 (WH) が
+    405 の芯線のラベル (BK) だけに無いので、不整合は色の1件だけ。"""
+    row = row_of(result, 'M65206')
+    assert row['一覧表の図番'] == 'EE6892-365-61C' and row['一覧表の行'] == 3
+    assert row['cells'] == M65206_ROW and (row['不整合数'], row['要確認数']) == (1, 0)
+    assert 'EE3298-534-07D' in basis(result, row, '図面の対応｜製作図')
+    assert 'EE3298-634-07E' in basis(result, row, '図面の対応｜線番設定表')
+    assert 'EE6892-610-01B' in basis(result, row, '図面の対応｜展開接続図')
+    assert '領域（RACK）' in basis(result, row, '端末1｜ユニット')
+    assert '近傍（ALS1 R1、33）' in basis(result, row, '端末2｜ユニット')
+    assert '製作図 *1,*2 / 線番設定表 *1,*2' in basis(result, row, '芯線｜線番')
+    wires = [w for w in result['wires'] if w['ケーブル番号'] == 'M65206']
+    assert [(w['線番接続ID'], w['線番設定表の線番'], w['製作図の端2 PIN'], w['製作図の色'], w['展開接続図のラベル'],
+             w['判定（PIN）'], w['判定（色）']) for w in wires] == [
+        ('*1', 'S121C', 'A', '(BK)', '(BK)', '○', '○'), ('*2', 'T121C', 'B', '(WH)', '(BK)', '○', '×')]
+
+
+def test_wire_row_selection_removes_the_false_wire_number_mismatches_of_the_first_study(result):
+    """実現性検討（405）の1回目は、線番設定表のモジュールごとの行のうち先頭の行で `*n` を置き換えたため、610-01B の
+    `121`/`081`、617-01B の `127`/`087`、634-01C の `X0205`/`X0205B` を食い違いと誤った。一覧表の端末に合う行を使うと、全部 ○。"""
+    for cable, line in (('M65202', 1), ('M65204', 2), ('M65C85', 15), ('M65C86', 16), ('M65C87', 17), ('M65714', 2),
+                        ('M39045', 25)):
+        row = next(r for r in result['rows'] if r['ケーブル番号'] == cable and r['一覧表の行'] == line)
+        assert row['cells']['芯線｜線番'] == '○', (cable, line)
+
+
+def test_cases_named_in_the_studies(result):
+    # 393（実現性検討の第3弾）: -678-04 は線番設定表が0件、M65219 の製作図パターン EE****-525-10 は0件
+    wire_x = [r for r in result['rows'] if r['一覧表の図番'] and r['cells']['図面の対応｜線番設定表'] == '×']
+    assert sorted(r['ケーブル番号'] for r in wire_x) == ['M39038', 'M65242']
+    assert '-678-04: 0件' in basis(result, next(r for r in wire_x if r['ケーブル番号'] == 'M39038'), '図面の対応｜線番設定表')
+    fab_x = [r for r in result['rows'] if r['一覧表の図番'] and r['cells']['図面の対応｜製作図'] == '×']
+    assert [(r['ケーブル番号'], '0件' in basis(result, r, '図面の対応｜製作図')) for r in fab_x] == [('M65219', True)]
+    # 405（第4弾）: 色の食い違い（405 は (BU/RD)・(BU/BK)、製作図は (TQ/RD)・(TQ/BK)）
+    row = row_of(result, 'M39664')
+    assert row['cells']['芯線｜色'] == '×' and 'TQ' in basis(result, row, '芯線｜色') + ''.join(
+        w['製作図の色'] for w in result['wires'] if w['ケーブル番号'] == 'M39664')
+    # SG のドレイン線（405 の PIN・線番に SG があるだけ）は △
+    row = row_of(result, 'M39613')
+    assert (row['cells']['芯線｜PIN'], row['cells']['芯線｜線番']) == ('△', '△')
+    assert 'SG/SH を除いて一致' in basis(result, row, '芯線｜PIN')
+    # 610-01B の DC PS1 R1(SLAVE) は、領域の2番目の候補（SHIELD COVER が最有力）
+    row = row_of(result, 'M65204')
+    assert '展開接続図 ○ 領域（DC PS1 R1(SLAVE) (GEXUS15)）' in basis(result, row, '端末2｜ユニット')
+    # 展開接続図が無い（アップロードに無い）ケーブルは × で、その項目の根拠に「パターン」が出る
+    row = row_of(result, 'M65A06')
+    assert row['cells']['図面の対応｜展開接続図'] == '×' and 'EE****-405-14: 0件' in basis(result, row, '図面の対応｜展開接続図')
+
+
+def test_unit_evidence_kinds_all_occur_in_the_real_data(result):
+    """ユニットの根拠（領域・機器・近傍）と GND 線の相手側の対象外が、実データでそれぞれ使われている。"""
+    basis_all = [d['判断根拠'] for d in result['details'] if d['項目'].endswith('ユニット')]
+    counts = {w: sum(f'展開接続図 {sym} {w}（' in b for b in basis_all for sym in ('○', '△')) for w in ('領域', '機器', '近傍')}
+    assert all(n >= 5 for n in counts.values()), counts
+    assert sum('GND 線の相手側は対象外' in b for b in basis_all) == 12
+    heater = [b for b in basis_all if '機器（BH' in b]
+    assert len(heater) == 16                      # 602-01E のヒーター（コネクタの先の配線をたどって機器の箱の名前を読む）
 
 
 def test_excel_matches_preview_and_has_all_rows(result):
     sheets = dict(preview_sheets(result))
     assert {k: len(v) for k, v in sheets.items()} == {
-        'Summary': 16, '整合性チェック': 1566, 'ケーブル一覧表': 134, '線番設定表': 403,
-        '製作図の接続': 456, 'パターンの解決': 119, '製作図の文字': 3852}
-    book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None, keep_default_na=False)
-    assert {k: len(v) for k, v in book.items()} == {k: len(v) for k, v in sheets.items()}
+        'Summary': 24, '整合性チェック': 228, '照合明細': 4144, '芯線の照合': 1101, 'ケーブル一覧表': 134, '線番設定表': 403,
+        '製作図の接続': 456, '展開接続図': 628, 'パターンの解決': 149, '製作図の文字': 3852}
+    wb = build_workbook(result)
+    book = pd.read_excel(io.BytesIO(wb), sheet_name=None, keep_default_na=False)
+    assert list(book) == list(sheets)
+    for name, frame in sheets.items():
+        if name != '整合性チェック':                 # 2段見出し（行数が2行多く読まれる）
+            assert len(book[name]) == len(frame), name
+    assert len(book['整合性チェック']) == 228 + 1       # 2段目の見出し（項目名）が1行目のデータとして読まれる

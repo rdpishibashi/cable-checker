@@ -358,4 +358,4 @@ def test_drawing_without_text_skips_all_readers(tmp_path, monkeypatch):
     doc.saveas(str(path))
     d = consistency.analyze_drawing(str(path), 'EE0001-001-01A')
     assert d['no_text'] and d['kinds'] == []
-    assert consistency.check_consistency([d])['checks'] == []
+    assert consistency.check_consistency([d])['rows'] == []

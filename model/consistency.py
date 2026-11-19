@@ -147,6 +147,7 @@ def analyze_drawing(path, name):
         'fab_texts': fab['texts'],
         'fab_text': _squash(' '.join(fab['texts'])),
         'fab_conns': fab_drawing.connection_rows(fab),
+        'schematic': None,          # 2段目（analyze_uploads）が展開接続図として読んだときだけ入る
     }
 
 
@@ -251,11 +252,20 @@ def _cable_wire_rows(cable, wire_drawings):
 
 # ---------------------------------------------------------------- 展開接続図の読み取り（2段目）
 
+_KINDS_393 = (KIND_LIST, KIND_WIRE, KIND_FAB)
+
+
 def schematic_targets(drawings):
-    """一覧表の「接続図パターン」が指す図面の図番（昇順）。2段目はこの図面だけを展開接続図として読む。"""
+    """一覧表の「接続図パターン」が指す図面の図番（昇順）。2段目はこの図面だけを展開接続図として読む。
+
+    393 の表（一覧表・線番設定表・製作図の線番/PIN）が見つかった図面は除く。`EE****-637-**` のようなパターンは、
+    展開接続図 EE6888-637-01A だけでなく、同じ `-637-` を持つ 393 の線番設定表にも当たるため（読むと、393 の図面にある
+    ケーブル番号の文字が展開接続図の出現として数えられてしまう）。
+    """
     by_name = {d['drawing_number']: d for d in drawings}
     patterns = {p for d in drawings for r in d['list_rows'] for p in _values(r.get('接続図パターン'))}
-    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), by_name)})
+    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), by_name)
+                   if not set(d['kinds']) & set(_KINDS_393)})
 
 
 # ---------------------------------------------------------------- 照合の部品
@@ -451,7 +461,9 @@ def _wire_where(sel):
 # ---------------------------------------------------------------- 一覧表の行 → 展開接続図
 
 def _schematic_names(ctx, patterns):
-    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), ctx.by_name)})
+    """接続図パターンが指す図面（393 の表が見つかった図面は展開接続図ではないので除く。`schematic_targets()` と同じ）。"""
+    return sorted({d['drawing_number'] for p in patterns for d in _resolve(fab_pattern_regex(p), ctx.by_name)
+                   if not set(d['kinds']) & set(_KINDS_393)})
 
 
 def _side_names(occ, side):

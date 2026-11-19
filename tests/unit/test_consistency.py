@@ -383,6 +383,14 @@ def test_schematic_cell_states():
     assert sym(ds, 'sch') == UNREAD
 
 
+def test_pattern_that_only_matches_a_393_drawing_is_not_a_schematic():
+    """接続図パターンが 393 の図面（製作図など）にだけ当たるとき、展開接続図は無い（アップロードに無い）。「読めない」ではない。"""
+    ds = with_schematic(build(), pattern='EE****-534-**')            # 製作図 EE3298-534-07D にだけ当たる
+    by_name(ds, SCH_NAME)['kinds'] = ['展開接続図']
+    s, basis = cell(ds, 'sch')
+    assert s == NG and 'アップロードに無い' in basis
+
+
 def test_cable_only_in_a_schematic_gets_a_row_with_list_x():
     ds = with_schematic(build(), occ=occurrence([], cable='M12345'))
     res, row = run(ds, cable='M12345')
@@ -640,6 +648,16 @@ def test_pattern_resolutions_include_the_schematic_patterns():
 def test_schematic_targets_are_only_drawings_pointed_at_by_the_list(monkeypatch):
     ds = with_schematic(build())
     ds.append(drawing('EE7777-700-01A'))
+    assert C.schematic_targets(ds) == [SCH_NAME]
+
+
+def test_schematic_targets_skip_393_drawings_that_the_pattern_also_matches():
+    """接続図パターン `EE****-610-**` は、同じ `-610-` を持つ 393 の図面（線番設定表など）にも当たる。393 の表が見つかった図面は
+    展開接続図として読まない（読むと、393 の図面にあるケーブル番号の文字が展開接続図の出現として数えられる）。"""
+    ds = with_schematic(build())
+    ds.append(drawing('EE3298-610-02A', kinds=['線番設定表']))
+    ds.append(drawing('EE3298-610-03A', kinds=['ケーブル製作図']))
+    ds.append(drawing('EE3298-610-04A', kinds=['ケーブル一覧表']))
     assert C.schematic_targets(ds) == [SCH_NAME]
 
 

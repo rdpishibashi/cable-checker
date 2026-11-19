@@ -968,15 +968,17 @@ def _end_info(g, grid, device_rects, regions, E, term, inner):
 
 
 # 図中の参照: 「to POWER LINE (SYSTEM I/F BOX) (-405-08)」のように、括弧の中の `-英数字3-英数字2` が参照先の図番（の一部）を示す。
-# 括弧の中はその後ろに任意の文字が続いてよい（`(-405-05 3/4)` のシート番号、`(-405-01,02)` の複数）。
+# 括弧の中はその後ろに任意の文字が続いてよい（`(-405-05 3/4)` のシート番号など）。
+# `(-405-01,02)` のようにカンマで続く2桁は、頭の `-405-` を引き継ぐ別の参照（`-405-01` と `-405-02`）。`-405-01,-405-02` も同じ。
 _REF_RE = re.compile(r'\(\s*(-[0-9A-Z]{3}-[0-9A-Z]{2})([^()]*)\)')
+_REF_NEXT_RE = re.compile(r'\s*[,、]\s*(-[0-9A-Z]{3}-[0-9A-Z]{2}|[0-9A-Z]{2})(?![0-9A-Z])')
 
 
 def find_references(texts):
     """図中の文字から、他の図面への参照 `(-xxx-xx…)` を拾う。
 
     Args:
-        texts: 文字列のリスト（改行・全角は問わない。NFKC で正規化して見る）。
+        texts: 文字列のリスト（改行・全角は問わない。NFKC で正規化して見る）。`(-405-01,02)` は `-405-01` と `-405-02` の2件になる。
     Returns:
         [{'pattern': '-405-08', 'text': 参照を含む文字（空白を1つに詰めたもの）}, ...]（文字の出現順、(pattern, text) の重複は除く）。
     """
@@ -984,10 +986,14 @@ def find_references(texts):
     for raw in texts:
         text = re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', raw or '')).strip()
         for m in _REF_RE.finditer(text.upper()):
-            key = (m.group(1), text)
-            if key not in seen:
-                seen.add(key)
-                out.append({'pattern': m.group(1), 'text': text})
+            patterns, rest, prefix = [m.group(1)], m.group(2), m.group(1)[:-2]
+            while (n := _REF_NEXT_RE.match(rest)):
+                patterns.append(n.group(1) if n.group(1).startswith('-') else prefix + n.group(1))
+                rest = rest[n.end():]
+            for pattern in patterns:
+                if (pattern, text) not in seen:
+                    seen.add((pattern, text))
+                    out.append({'pattern': pattern, 'text': text})
     return out
 
 

@@ -1,5 +1,5 @@
 """Cable-checker: 展開接続図・ケーブル製作図の DXF からケーブル番号を抽出して Excel に出力し、
-両者の Excel を比較する。393 のケーブル一覧表・線番設定表・ケーブル製作図の整合性もチェックする（View 層）。
+両者の Excel を比較する。393 のケーブル一覧表・線番設定表・ケーブル製作図と、展開接続図（405）の整合性もチェックする（View 層）。
 
 処理は model/ に置き、この画面は入力の受け取り・表示・ダウンロードだけを担う。
 入力の種類（405 展開接続図／393 ケーブル製作図）ごとにタブを分け、ウィジェットのキー・
@@ -39,7 +39,7 @@ KINDS = [
 
 COMPARE_TAB = '比較（405と393）'
 COMPARE_RESULT_KEY = 'compare_result'  # {'sig': 入力の署名, 'rows': [...], 'groups': [...], 'xlsx': bytes, 'names': (名前405, 名前393)}
-CHECK_TAB = '整合性チェック（393）'
+CHECK_TAB = '整合性チェック'
 CHECK_RESULT_KEY = 'check_result'  # {'sig': 入力の署名, 'result': check_consistency() の戻り値, 'errors': [...], 'xlsx': bytes}
 
 
@@ -89,9 +89,11 @@ def _render_header():
             "3. 「比較」タブでは、1・2で出力した2つのExcelファイル（展開接続図とケーブル製作図）を"
             "アップロードし、ケーブル番号ごとに、そのケーブルがある図面の図番を並べて比較します"
             "（片方にしかないケーブルは、もう一方の図番欄が空白になります）",
-            "4. 「整合性チェック」タブでは、ケーブル製作図（393）のDXFをアップロードし、ケーブル一覧表・"
-            "線番設定表・ケーブル製作図の3つについて、ケーブル番号ごとに関連する項目の整合性をチェックします"
-            "（記載している図番も出力。cable_consistency_393.xlsx）",
+            "4. 「整合性チェック」タブでは、ケーブル製作図（393）と展開接続図（405）のDXFをまとめてアップロードし、"
+            "ケーブル一覧表の1行ごとに、一覧表・線番設定表・ケーブル製作図・展開接続図の整合性をチェックします。"
+            "393 の図面は内容から見分け、一覧表の「接続図図面番号」が指す図面を展開接続図として読みます"
+            "（cable_consistency.xlsx。各項目の判定は ○一致・△一致（根拠が弱い）・×不整合・？読めない・－対象外 の記号で、"
+            "根拠は「照合明細」シートに出ます）",
             "",
             "**Excelファイルの内容：** Summary（図番・タイトル・サブタイトル・ケーブル数。"
             "ケーブル0件の図面も載せる）／ケーブル一覧（図番×ケーブル番号）／"
@@ -276,8 +278,8 @@ def _check_signature(files):
 def _run_check(files):
     progress = st.progress(0.0, text="準備中...")
 
-    def on_progress(done, total, name):
-        progress.progress(done / total, text=f"読み取り中 ({done + 1}/{total}): {name}")
+    def on_progress(done, total, name, phase):
+        progress.progress(done / total, text=f"{phase}中 ({done + 1}/{total}): {name}")
 
     drawings, errors = analyze_uploads([(f.name, f.getvalue()) for f in files], progress=on_progress)
     progress.empty()
@@ -318,10 +320,20 @@ def _render_check_result(state):
         if d['no_text']:
             st.warning(f"{d['drawing_number']} は文字が無いため読み取れません（文字が線に分解されている可能性があります。"
                        "元のDWGから文字を残してDXFに変換し直してください）。")
-    checks = result['checks']
-    n_ng = sum(c['結果'] == 'NG' for c in checks)
+        sch = d.get('schematic')
+        if sch and sch['region_error']:
+            st.warning(f"{d['drawing_number']} は領域を検出できませんでした。ユニットは機器・近傍のラベルだけで判定しています"
+                       f"（{sch['region_error']}）。")
+    if result['unused']:
+        st.info(f"照合に使っていない図面 {len(result['unused'])} 件: {'、'.join(result['unused'])}"
+                "（ケーブル一覧表・線番設定表・ケーブル製作図のどれにも当たらず、一覧表の図面パターン〈製作図・接続図〉も指していません）")
+    rows = result['rows']
+    kinds = {k: sum(k in d['kinds'] for d in result['drawings'])
+             for k in ('ケーブル一覧表', '線番設定表', 'ケーブル製作図', '展開接続図')}
     st.subheader("チェック結果")
-    st.caption(f"{len(result['drawings'])} 図面・照合 {len(checks)} 件（NG {n_ng} 件）")
+    st.caption(f"{len(result['drawings'])} 図面（一覧表 {kinds['ケーブル一覧表']}・線番設定表 {kinds['線番設定表']}・"
+               f"製作図 {kinds['ケーブル製作図']}・展開接続図 {kinds['展開接続図']}）・ケーブル {len(rows)} 行"
+               f"（不整合 {sum(r['不整合数'] > 0 for r in rows)} 行・要確認 {sum(r['要確認数'] > 0 for r in rows)} 行）")
     _render_check_preview(result)
     st.download_button(
         "分析結果ダウンロード", data=state['xlsx'], file_name=CHECK_FILENAME,
@@ -332,11 +344,12 @@ def _render_check_result(state):
 
 def _render_check_tab():
     st.write(
-        "ケーブル製作図（393）のDXFをまとめてアップロードします。ケーブル一覧表・線番設定表・"
-        "ケーブル製作図を図面の内容から見分け、ケーブル番号ごとに関連する項目の整合性をチェックします"
-        "（他のタブとは独立。393のDXFはここでもう一度アップロードします）。"
+        "ケーブル製作図（393）と展開接続図（405）のDXFをまとめてアップロードします。393の図面（ケーブル一覧表・"
+        "線番設定表・ケーブル製作図）は内容から見分け、一覧表の「接続図図面番号」が指す図面を展開接続図として読みます。"
+        "ケーブル一覧表の1行ごとに、図面の対応・端末（ユニット・モジュール・機器符号・部品種別）・ケーブル（種類・芯数）・"
+        "芯線（線番・PIN・色）の整合性をチェックします（他のタブとは独立。DXFはここでもう一度アップロードします）。"
     )
-    uploaded = st.file_uploader("ケーブル製作図（393。複数可，フォルダ可）", accept_multiple_files=True,
+    uploaded = st.file_uploader("ケーブル製作図（393）・展開接続図（405）（複数可，フォルダ可）", accept_multiple_files=True,
                                 key='uploader_check')
     files, ignored, skipped, dwg = _target_files(uploaded or [])
 

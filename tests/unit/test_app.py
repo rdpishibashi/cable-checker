@@ -459,7 +459,7 @@ def test_preview_shows_view_toggle_only_for_drawing_sheets(tmp_path, mounted):
     assert at.session_state['preview_expanded_405'] is True
 
 
-# ---- 整合性チェック（393）タブ ----
+# ---- 整合性チェックタブ ----
 
 TAB_CHECK = 3
 CHECK_NAME = 'EE6892-365-61C.dxf'
@@ -472,6 +472,35 @@ def cable_list_dxf_bytes(tmp_path):
     path = tmp_path / 'list.dxf'
     doc.saveas(str(path))
     return path.read_bytes()
+
+
+def list_with_schematic_pattern_bytes(tmp_path):
+    """M65206 の1行だけの一覧表（製作図パターン EE****-534-07・接続図パターン EE****-405-01・端末1 RACK/CN1）。"""
+    from tests.unit.test_drawing_readers import line, new_doc, text
+    doc, msp = new_doc()
+    xs, top_xs = [0, 25, 60, 90, 120, 160, 200], [0, 25, 60, 120, 160, 200]
+    for x in xs:
+        line(msp, (x, 90), (x, 150 if x in top_xs else 140))
+    for y in (150, 140, 130, 120, 110, 100, 90):
+        line(msp, (0, y), (200, y))
+    text(msp, '端末1', 85, 143)
+    text(msp, 'ケーブル仕様', 130, 143)
+    heads = (('W No.', 2), ('ケーブル製作図図面番号', 27), ('接続先', 62), ('コネクタ名称', 92), ('ケーブル種類', 122),
+             ('接続図図面番号', 162))
+    for label, x in heads:
+        text(msp, label, x, 132, 2.5)
+    for value, x in (('M65206', 2), ('EE****-534-07', 27), ('RACK', 62), ('CN1', 92), ('ACCESSORY CABLE', 122),
+                     ('EE****-405-01', 162)):
+        text(msp, value, x, 122, 2.5)
+    path = tmp_path / 'list405.dxf'
+    doc.saveas(str(path))
+    return path.read_bytes()
+
+
+def schematic_bytes(tmp_path):
+    """M65206 の展開接続図（楕円を横切る2本の芯線。左はコネクタ CN1、右は CN2）。"""
+    from tests.unit.test_schematic_reader import build
+    return open(build(tmp_path, name='EE1234-405-01A'), 'rb').read()
 
 
 def run_check_tab(files):
@@ -490,7 +519,7 @@ def check_button(at):
 def test_check_tab_is_the_fourth_tab_with_its_own_uploader():
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert [t.label for t in at.tabs][:4] == [
-        '展開接続図（405）', 'ケーブル製作図（393）', '比較（405と393）', '整合性チェック（393）']
+        '展開接続図（405）', 'ケーブル製作図（393）', '比較（405と393）', '整合性チェック']
     assert any('図番形式' in v for v in tab_elements(at, TAB_CHECK, 'info'))
     assert check_button(at) == []                      # アップロード前はボタンを出さない
     assert at.file_uploader(key='uploader_check').proto.multiple_files
@@ -503,24 +532,44 @@ def test_check_tab_ignores_non_target_files_and_warns_about_dwg():
 
 
 def test_check_tab_runs_previews_all_sheets_and_offers_download(tmp_path):
-    """守るもの: 実行→プレビュー（Excel と同じ7シート、既定は Summary）→ダウンロード。ボタンは「ケーブル一覧表」の図面だけでも動く。"""
+    """守るもの: 実行→プレビュー（Excel と同じ10シート、既定は Summary）→ダウンロード。ボタンは「ケーブル一覧表」の図面だけでも動く。"""
     at = run_check_tab([(CHECK_NAME, cable_list_dxf_bytes(tmp_path))])
     (button,) = check_button(at)
     assert not at.download_button                      # 実行前は結果もダウンロードも無い
     button.click().run()
     assert not at.exception and not at.error
     box = at.selectbox(key='preview_sheet_check')
-    assert box.options == ['Summary', '整合性チェック', 'ケーブル一覧表', '線番設定表', '製作図の接続',
-                           'パターンの解決', '製作図の文字']
+    assert box.options == ['Summary', '整合性チェック', '照合明細', '芯線の照合', 'ケーブル一覧表', '線番設定表', '製作図の接続',
+                           '展開接続図', 'パターンの解決', '製作図の文字']
     assert box.value == 'Summary'
-    assert any('1 図面・照合' in v for v in tab_elements(at, TAB_CHECK, 'caption'))
+    assert any('1 図面（一覧表 1・線番設定表 0・製作図 0・展開接続図 0）・ケーブル 2 行（不整合 2 行・要確認 0 行）' in v
+               for v in tab_elements(at, TAB_CHECK, 'caption'))
     box.select('整合性チェック').run()
     frame = at.dataframe[0].value
     assert set(frame['ケーブル番号']) == {'M39001', 'M39002'}
-    assert frame[(frame['ケーブル番号'] == 'M39001') & (frame['照合'] == '1 製作図の図面')]['結果'].tolist() == ['NG']
+    assert frame[frame['ケーブル番号'] == 'M39001']['図面の対応｜製作図'].tolist() == ['×']   # 製作図は同梱しない
     assert at.download_button[0].proto.label == '分析結果ダウンロード'
     types = [c.type for c in at.tabs[TAB_CHECK].children.values()]
     assert types.index('expander') < types.index('download_button')
+
+
+def test_check_tab_reads_the_schematic_pointed_at_by_the_list_and_checks_it(tmp_path):
+    """守るもの: 393 の一覧表と一緒に上げた 405 は、一覧表の「接続図図面番号」が指すものとして読まれ、整合性チェックに入る。
+    指されない 405（別のパターンのファイル）は「照合に使っていない図面」として info に出る。"""
+    files = [('EE6892-365-61C.dxf', list_with_schematic_pattern_bytes(tmp_path)),
+             ('EE1234-405-01A.dxf', schematic_bytes(tmp_path)),
+             ('EE5555-999-09A.dxf', schematic_bytes(tmp_path))]
+    at = run_check_tab(files)
+    check_button(at)[0].click().run()
+    assert not at.exception and not at.error
+    assert any('展開接続図 1）' in v for v in tab_elements(at, TAB_CHECK, 'caption'))
+    assert any('照合に使っていない図面 1 件: EE5555-999-09A' in v for v in tab_elements(at, TAB_CHECK, 'info'))
+    at.selectbox(key='preview_sheet_check').select('整合性チェック').run()
+    row = at.dataframe[0].value.iloc[0]
+    assert row['ケーブル番号'] == 'M65206' and row['図面の対応｜展開接続図'] == '○'
+    assert row['端末1｜機器符号'] == '○'                  # 一覧表の CN1 が、405 の左の端のコネクタ名と一致
+    at.selectbox(key='preview_sheet_check').select('展開接続図').run()
+    assert set(at.dataframe[0].value['図番']) == {'EE1234-405-01A'}
 
 
 def test_check_result_disappears_when_input_changes(tmp_path):

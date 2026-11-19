@@ -331,6 +331,16 @@ def test_fab_note_pattern_texts_and_no_table(tmp_path):
     assert fab_drawing.parse(load(doc, tmp_path))['tables'] == []
 
 
+def test_fab_without_tables_skips_wire_tracing_and_has_no_connections(tmp_path, monkeypatch):
+    """線番/PIN の表が無い図面（展開接続図など）は、重い電線の連結（trace）を呼ばず、接続は空のまま（速度のための省略。結果は変わらない）。"""
+    doc, msp = new_doc()
+    text(msp, 'hello', 0, 0)
+    line(msp, (0, 0), (50, 0))
+    monkeypatch.setattr(fab_drawing, 'trace', lambda *a, **k: (_ for _ in ()).throw(AssertionError('trace called')))
+    res = fab_drawing.parse(load(doc, tmp_path))
+    assert res['tables'] == [] and res['conns'] == []
+
+
 def test_reading_does_not_share_struck_flags_between_readers(tmp_path):
     """守るもの: 3つの読み取りは同じ Geometry を共用するが、文字は読み取りごとにコピーする（削除済みの印が混ざらない）。"""
     doc, msp = wire_table_doc()
@@ -358,4 +368,4 @@ def test_drawing_without_text_skips_all_readers(tmp_path, monkeypatch):
     doc.saveas(str(path))
     d = consistency.analyze_drawing(str(path), 'EE0001-001-01A')
     assert d['no_text'] and d['kinds'] == []
-    assert consistency.check_consistency([d])['checks'] == []
+    assert consistency.check_consistency([d])['rows'] == []

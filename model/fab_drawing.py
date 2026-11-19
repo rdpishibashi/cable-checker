@@ -325,7 +325,8 @@ def parse(geo):
     mark_struck(txts, [s for s in segs if not any(
         t['x0'] - TOL <= s.x0 and s.x1 <= t['x1'] + TOL and t['y0'] - TOL <= s.y0 <= t['y1'] + TOL for t in tables)])
     tables = build_tables(txts, cols)   # 削除の判定後に値を取り直す
-    conns, _ = trace(tables, segs, txts, geo.arc_ends)
+    # 表が無ければ接続の端（ports）が無く、conns は必ず空になる。電線の連結（重い）を省く（展開接続図 405 を 393 として読む1段目が主な対象）
+    conns = trace(tables, segs, txts, geo.arc_ends)[0] if tables else []
     return {'tables': tables, 'conns': conns, 'notes': parse_notes(txts),
             'texts': [norm(t.s) for t in txts if not t.struck]}
 

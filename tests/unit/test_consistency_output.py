@@ -1,7 +1,7 @@
 """整合性チェックの Excel・プレビュー（consistency_output.py）の合成データテスト。
 
 守るもの: シート名と順、プレビューと Excel の一致、整合性チェックの2段見出し・記号の色・照合明細へのリンク、
-照合明細の行色、根拠のシート（パターンの解決・製作図の文字・展開接続図の読み取り・芯線の照合）、ケーブル番号の抽出・比較のシート、Arrow への変換。
+照合明細の行色、根拠のシート（図番パターン照合・製作図の文字・展開接続図の読み取り・芯線照合）、ケーブル番号の抽出・比較のシート、Arrow への変換。
 """
 import io
 import re
@@ -69,8 +69,8 @@ def read_check_sheet(result):
 def test_sheets_are_in_the_documented_order_and_columns():
     sheets = dict(preview_sheets(make_result()))
     assert list(sheets) == [
-        'Summary', '整合性チェック', '照合明細', '芯線の照合', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff',
-        '図面一覧', 'ケーブル抽出', 'ケーブル一覧表', '線番設定表', '製作図の接続', '展開接続図', 'パターンの解決', '製作図の文字']
+        'Summary', '図面一覧', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
+        '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']
     assert [n for n in sheets if n in FIXED_SHEET_NAMES] == FIXED_SHEET_NAMES                 # 固定のシートは並びを保つ
     assert list(sheets[out.CHECK_SHEET].columns) == CHECK_COLUMNS == [
         'ケーブル番号', '一覧表の図番', '一覧表の行', '不整合数', '要確認数', *ITEM_COLUMNS]
@@ -179,7 +179,7 @@ def test_too_many_cells_for_hyperlinks_fall_back_to_plain_symbols(monkeypatch):
     assert ws['F3'].value == '○' and ws['F3'].hyperlink is None
 
 
-# ---------------------------------------------------------------- 照合明細・芯線の照合・根拠のシート
+# ---------------------------------------------------------------- 照合明細・芯線照合・根拠のシート
 
 def test_detail_rows_are_colored_by_judgment():
     ws = openpyxl.load_workbook(io.BytesIO(build_workbook(make_result())))[out.DETAIL_SHEET]
@@ -263,10 +263,10 @@ def test_extract_sheet_lists_every_cable_of_both_sets_with_remarks():
         ['ケーブル製作図（393）', LIST_NAME, CABLE, f'備考{CABLE}']]
 
 
-def test_compare_sheets_are_all_diff_and_one_per_group_after_the_wire_check_sheet():
-    """守るもの: All Diff と、393 のサブタイトル優先のグループごとの比較シートが、整合性チェックの群のあと・図面一覧の前に入り、中身は今の比較と同じ列・値。"""
+def test_compare_sheets_are_all_diff_and_one_per_group_after_the_extract_sheet():
+    """守るもの: All Diff と、393 のサブタイトル優先のグループごとの比較シートが、ケーブル抽出のあと・整合性チェックの前に入り、中身は今の比較と同じ列・値。"""
     sheets = dict(preview_sheets(make_result()))
-    assert list(sheets)[3:8] == ['芯線の照合', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '図面一覧']
+    assert list(sheets)[2:7] == ['ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック']
     assert sheets['All Diff'].values.tolist() == [
         [CABLE, SCH_NAME, f'{WIRE_NAME}、{LIST_NAME}'], ['M70001', SCH_NAME, ''], ['M99999', '', WIRE_NAME]]
     assert list(sheets['All Diff'].columns) == ['ケーブル番号', '展開接続図の図番', 'ケーブル製作図の図番']
@@ -285,7 +285,7 @@ def test_group_sheet_names_do_not_collide_with_fixed_sheets():
     ds = build()
     result = with_extracts(check_consistency(ds), {'405': [], '393': [
         extract(n, [CABLE] if n == LIST_NAME else [], title='All') for n in sorted(d['drawing_number'] for d in ds)]})
-    assert [n for n, _ in preview_sheets(result)][4:7] == ['All Diff', 'All_2 Diff', '図面一覧']
+    assert [n for n, _ in preview_sheets(result)][3:5] == ['All Diff', 'All_2 Diff']
 
 
 # ---------------------------------------------------------------- 形の保証
@@ -293,7 +293,7 @@ def test_group_sheet_names_do_not_collide_with_fixed_sheets():
 def test_empty_result_still_builds_all_sheets():
     result = with_extracts(check_consistency([]), {'405': [], '393': []})
     book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None)
-    assert list(book) == ['Summary', '整合性チェック', '照合明細', '芯線の照合', 'All Diff', *FIXED_SHEET_NAMES[4:]]
+    assert list(book) == [*FIXED_SHEET_NAMES[:3], 'All Diff', *FIXED_SHEET_NAMES[3:]]
 
 
 def test_every_preview_sheet_converts_to_arrow():

@@ -1,9 +1,9 @@
 """整合性チェックの Excel 出力とプレビュー（streamlit 非依存）。1つの Excel に、整合性チェック・ケーブル番号の抽出と比較をまとめる。
 
-シート構成: `Summary`（項目ごとの記号の件数と、図面・ケーブル番号の件数）→ `整合性チェック`（1ケーブル1行＝一覧表の行。項目のセルは
-記号で、照合明細の該当行へのリンク）→ `照合明細`（セルごとの根拠）→ `芯線の照合`（線番接続IDごとの線番・PIN・色）→
-`All Diff`・`<グループ名> Diff`（ケーブル番号の比較。展開接続図と製作図の図番を並べる）→ `図面一覧`・`ケーブル抽出`（抽出した図面とケーブル番号）→
-`ケーブル一覧表`・`線番設定表`・`製作図の接続`・`展開接続図`（読み取った明細）→ `パターンの解決`・`製作図の文字`（根拠）。
+シート構成: `Summary`（項目ごとの記号の件数と、図面・ケーブル番号の件数）→ `図面一覧`・`ケーブル抽出`（抽出した図面とケーブル番号）→
+`All Diff`・`<グループ名> Diff`（ケーブル番号の比較。展開接続図と製作図の図番を並べる）→ `整合性チェック`（1ケーブル1行＝一覧表の行。項目のセルは
+記号で、照合明細の該当行へのリンク）→ `照合明細`（セルごとの根拠）→ `芯線照合`（線番接続IDごとの線番・PIN・色）→
+`展開接続図`・`ケーブル一覧表`・`線番設定表`・`製作図の接続表`（読み取った明細）→ `製作図の文字`・`図番パターン照合`（根拠）。
 画面の「分析結果プレビュー」と Excel は同じ `preview_sheets()` から作る（別実装にしない）。
 プレビューの `整合性チェック` は見出し1段（`グループ｜項目`）、Excel は2段見出し（グループを結合）。
 記号の色は他の比較ツールと同じ薄い配色（○＝薄い緑、△＝薄い黄、×＝薄いピンク、？＝薄い青、－＝色なし）。
@@ -25,18 +25,18 @@ EXCEL_FILENAME = 'cable_consistency.xlsx'
 SUMMARY_SHEET = 'Summary'
 CHECK_SHEET = '整合性チェック'
 DETAIL_SHEET = '照合明細'
-WIRE_CHECK_SHEET = '芯線の照合'
+WIRE_CHECK_SHEET = '芯線照合'
 INDEX_SHEET = '図面一覧'
 EXTRACT_SHEET = 'ケーブル抽出'
 LIST_SHEET = 'ケーブル一覧表'
 WIRE_SHEET = '線番設定表'
-CONN_SHEET = '製作図の接続'
+CONN_SHEET = '製作図の接続表'
 SCHEMATIC_SHEET = '展開接続図'
-PATTERN_SHEET = 'パターンの解決'
+PATTERN_SHEET = '図番パターン照合'
 TEXT_SHEET = '製作図の文字'
-# 固定のシート（並び順）。`All Diff` と `<グループ名> Diff` は整合性チェック群（芯線の照合）の後ろ、図面一覧の前に入る
-FIXED_SHEET_NAMES = [SUMMARY_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, INDEX_SHEET, EXTRACT_SHEET, LIST_SHEET,
-                     WIRE_SHEET, CONN_SHEET, SCHEMATIC_SHEET, PATTERN_SHEET, TEXT_SHEET]
+# 固定のシート（並び順）。`All Diff` と `<グループ名> Diff` は `ケーブル抽出` の後ろ、`整合性チェック` の前に入る
+FIXED_SHEET_NAMES = [SUMMARY_SHEET, INDEX_SHEET, EXTRACT_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, SCHEMATIC_SHEET,
+                     LIST_SHEET, WIRE_SHEET, CONN_SHEET, TEXT_SHEET, PATTERN_SHEET]
 SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル製作図（393）'}
 INDEX_COLUMNS = ['セット', '図番', 'タイトル', 'サブタイトル', '図面の種類', 'ケーブル数', '備考']
 EXTRACT_COLUMNS = ['セット', '図番', 'ケーブル番号', '備考']
@@ -246,7 +246,7 @@ def sheet_plan(result):
     plan = []
     for name in FIXED_SHEET_NAMES:
         plan.append((name, frames[name](result), None))
-        if name == WIRE_CHECK_SHEET:
+        if name == EXTRACT_SHEET:
             plan += [(sheet, compare_frame(rows), rows) for sheet, rows in compare_sheets]
     return plan
 

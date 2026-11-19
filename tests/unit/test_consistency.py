@@ -651,7 +651,7 @@ REF_TARGET = 'EE6892-405-08A'
 
 
 def test_pattern_resolutions_include_references_written_in_the_schematic():
-    """展開接続図の図中の `(-405-08)` は、パターンの解決に行として足す（頭の英字2・数字4と末尾の改訂記号は任意。備考に参照元の文字）。"""
+    """展開接続図の図中の `(-405-08)` は、図番パターン照合に行として足す（頭の英字2・数字4と末尾の改訂記号は任意。備考に参照元の文字）。"""
     ds = with_schematic(build())
     by_name(ds, SCH_NAME)['schematic']['refs'] = [
         {'pattern': '-405-08', 'text': 'to POWER LINE (-405-08)'}, {'pattern': '-405-08', 'text': 'XRLS1 (-405-08)'},

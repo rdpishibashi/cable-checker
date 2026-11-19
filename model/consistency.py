@@ -45,7 +45,7 @@ KIND_LIST = 'ケーブル一覧表'
 KIND_WIRE = '線番設定表'
 KIND_FAB = 'ケーブル製作図'
 KIND_SCHEMATIC = '展開接続図'
-KIND_REF = '図中の参照'  # パターンの解決シートの「参照元図面種別」（展開接続図の文字が指す。照合には使わない）
+KIND_REF = '図中の参照'  # 図番パターン照合シートの「参照元図面種別」（展開接続図の文字が指す。照合には使わない）
 
 SET_405, SET_393 = '405', '393'     # アップロードのセット（展開接続図／ケーブル製作図）
 
@@ -881,7 +881,7 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
 
 
 def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns):
-    """芯線の 線番・PIN・色 のセルと、芯線の照合の行。"""
+    """芯線の 線番・PIN・色 のセルと、芯線照合の行。"""
     num_cell, pin_cell, color_cell = _Cell('芯線 線番'), _Cell('芯線 PIN'), _Cell('芯線 色')
     fab_names = [d['drawing_number'] for d in ch['fabs']]
 
@@ -1040,7 +1040,7 @@ def _correspondence_cells(ctx, row, ch, list_name, pick):
 
 
 def _evaluate_row(ctx, list_name, row):
-    """一覧表の1行について、全項目のセルと芯線の照合の行を作る。Returns: ({項目の列名: [セル]}, 芯線の照合の行)"""
+    """一覧表の1行について、全項目のセルと芯線照合の行を作る。Returns: ({項目の列名: [セル]}, 芯線照合の行)"""
     cable = row['ケーブル番号']
     ch = _chain(row, ctx.by_name_393)
     pick = _pick_occurrence(ctx, row)
@@ -1113,7 +1113,7 @@ def check_consistency(drawings):
     Returns:
         {'rows': [{'ケーブル番号', '一覧表の図番', '一覧表の行', '不整合数', '要確認数', 'cells': {列名: 記号}, 'links': {列名: 照合明細の通し番号}}],
          'details': [照合明細の行],            # 整合性チェックの全セルに1行ずつ（線番設定表だけ3行）
-         'wires': [芯線の照合の行],
+         'wires': [芯線照合の行],
          'drawings': drawings, 'unused': [照合に使っていない図面の図番]}
         行の並びはケーブル番号→一覧表の図番→一覧表の行。一覧表に無いケーブル（線番設定表・展開接続図にだけある）は
         ケーブル番号の並びの中に、一覧表の図番・行を空にして入る。

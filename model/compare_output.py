@@ -1,10 +1,8 @@
-"""ケーブル比較結果の Excel 出力（streamlit 非依存）。
+"""ケーブル番号の比較結果の表とシートの書き込み（streamlit 非依存）。整合性チェックの Excel（`consistency_output`）が使う。
 
-シート構成: `Summary`（入力ファイル名と件数）→ `All Diff`（ケーブル番号・展開接続図の図番・ケーブル製作図の図番）→
-グループごとの `<グループ名> Diff`（同じ3列。ケーブル製作図側はそのグループの図面だけ）。
-行の色は他の比較ツールと同じ薄い配色（展開接続図だけ＝ピンク、ケーブル製作図だけ＝青、両方＝緑）。
+シート: `All Diff`（ケーブル番号・展開接続図の図番・ケーブル製作図の図番）→ グループごとの `<グループ名> Diff`（同じ3列。
+ケーブル製作図側はそのグループの図面だけ）。行の色は他の比較ツールと同じ薄い配色（展開接続図だけ＝ピンク、ケーブル製作図だけ＝青、両方＝緑）。
 """
-import io
 import re
 
 import pandas as pd
@@ -12,11 +10,9 @@ import pandas as pd
 from .cable_compare import BOTH, ONLY_393, ONLY_405, status
 from .excel_output import display_width
 
-SUMMARY_SHEET = 'Summary'
 ALL_SHEET = 'All Diff'
 GROUP_SHEET_SUFFIX = ' Diff'
 SHEET_NAME_MAX = 31
-COMPARE_FILENAME = 'cable_comparison.xlsx'
 
 COMPARE_COLUMNS = ['ケーブル番号', '展開接続図の図番', 'ケーブル製作図の図番']
 DRAWING_SEPARATOR = '、'
@@ -29,13 +25,13 @@ STATUS_COLORS = {
 }
 
 
-def group_sheet_names(names):
+def group_sheet_names(names, reserved=()):
     """グループ名から `<グループ名> Diff` のシート名を作る。
 
     Excel の制約に合わせる: 使えない文字 `[]:*?/\\` は `_` に置換、31 文字に収める、
-    重複（大小文字無視。`All Diff` との衝突を含む）は `_2`・`_3` を付けて避ける。
+    重複（大小文字無視。`All Diff` と、同じブックの別のシート名 `reserved` との衝突を含む）は `_2`・`_3` を付けて避ける。
     """
-    used = {ALL_SHEET.lower()}
+    used = {ALL_SHEET.lower(), *(r.lower() for r in reserved)}
     result = []
     for name in names:
         base = re.sub(r'[\[\]:*?/\\]', '_', name).strip("' ") or '_'
@@ -67,46 +63,8 @@ def count_rows(rows):
     return counts
 
 
-def summary_frame(rows, name_405, name_393):
-    counts = count_rows(rows)
-    return pd.DataFrame([
-        ['展開接続図のExcel', name_405],
-        ['ケーブル製作図のExcel', name_393],
-        ['展開接続図のケーブル数', counts[ONLY_405] + counts[BOTH]],
-        ['ケーブル製作図のケーブル数', counts[ONLY_393] + counts[BOTH]],
-        ['両方にあるケーブル数', counts[BOTH]],
-        ['展開接続図だけにあるケーブル数', counts[ONLY_405]],
-        ['ケーブル製作図だけにあるケーブル数', counts[ONLY_393]],
-    ], columns=['項目', '値'])
-
-
-def build_compare_workbook(rows, name_405, name_393, groups=()):
-    """`compare_cables()` の結果（All Diff）と `compare_groups()` の結果（グループごと）から Excel のバイト列を作る。"""
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        book = writer.book
-        header_fmt = book.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1})
-
-        summary = summary_frame(rows, name_405, name_393)
-        summary.to_excel(writer, sheet_name=SUMMARY_SHEET, index=False)
-        ws = writer.sheets[SUMMARY_SHEET]
-        for col, name in enumerate(summary.columns):
-            ws.write(0, col, name, header_fmt)
-            width = max(display_width(str(v)) for v in [name, *summary[name]]) + 2
-            ws.set_column(col, col, min(width, 60))
-
-        row_fmts = {
-            key: book.add_format({'bg_color': bg, 'font_color': fg, 'border': 1})
-            for key, (bg, fg) in STATUS_COLORS.items()
-        }
-        sheets = [(ALL_SHEET, rows)] + list(zip(group_sheet_names([g['name'] for g in groups]),
-                                                [g['rows'] for g in groups]))
-        for sheet_name, sheet_rows in sheets:
-            _write_compare_sheet(writer, sheet_name, sheet_rows, header_fmt, row_fmts)
-    return output.getvalue()
-
-
-def _write_compare_sheet(writer, sheet_name, rows, header_fmt, row_fmts):
+def write_compare_sheet(writer, sheet_name, rows, header_fmt, row_fmts):
+    """比較のシート（`compare_frame(rows)`）を書く。行は区分（`status`）で色を付ける。`row_fmts` は `status_formats(book)` の戻り値。"""
     frame = compare_frame(rows)
     frame.to_excel(writer, sheet_name=sheet_name, index=False)
     ws = writer.sheets[sheet_name]
@@ -119,3 +77,8 @@ def _write_compare_sheet(writer, sheet_name, rows, header_fmt, row_fmts):
         for col, value in enumerate(values):
             ws.write(i, col, value, fmt)
     ws.freeze_panes(1, 0)
+
+
+def status_formats(book):
+    """区分（`STATUS_COLORS`）ごとの行の書式 {区分: xlsxwriter の書式}。"""
+    return {key: book.add_format({'bg_color': bg, 'font_color': fg, 'border': 1}) for key, (bg, fg) in STATUS_COLORS.items()}

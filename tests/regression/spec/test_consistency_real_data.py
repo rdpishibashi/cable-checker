@@ -279,9 +279,17 @@ def test_unit_evidence_kinds_all_occur_in_the_real_data(result):
 
 def test_excel_matches_preview_and_has_all_rows(result):
     sheets = dict(preview_sheets(result))
+    # シートの並びと行数。All Diff＝ケーブル 217（両方108・展開接続図だけ2・製作図だけ107）、グループは 393 のサブタイトル優先の2つ
+    # （405 全体と突き合わせるので、グループの行＝そのグループのケーブル＋405 にだけあるケーブル）、図面一覧＝129図面、ケーブル抽出＝405 の110＋393 の267
     assert {k: len(v) for k, v in sheets.items()} == {
-        'Summary': 24, '整合性チェック': 228, '照合明細': 4144, '芯線の照合': 1101, 'ケーブル一覧表': 134, '線番設定表': 403,
-        '製作図の接続': 456, '展開接続図': 628, 'パターンの解決': 174, '製作図の文字': 3852}
+        'Summary': 31, '整合性チェック': 228, '照合明細': 4144, '芯線の照合': 1101, 'All Diff': 217,
+        'ケーブル一覧表 Diff': 124, '線番設定表 Diff': 205, '図面一覧': 129, 'ケーブル抽出': 377, 'ケーブル一覧表': 134,
+        '線番設定表': 403, '製作図の接続': 456, '展開接続図': 628, 'パターンの解決': 174, '製作図の文字': 3852}
+    assert list(sheets) == ['Summary', '整合性チェック', '照合明細', '芯線の照合', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff',
+                            '図面一覧', 'ケーブル抽出', 'ケーブル一覧表', '線番設定表', '製作図の接続', '展開接続図', 'パターンの解決', '製作図の文字']
+    index = sheets['図面一覧']
+    assert index.groupby('セット').size().to_dict() == {'展開接続図（405）': 23, 'ケーブル製作図（393）': 106}
+    assert (index['備考'] == '照合に使っていない').sum() == 7 and index[index['備考'] != '照合に使っていない']['備考'].eq('').all()
     wb = build_workbook(result)
     book = pd.read_excel(io.BytesIO(wb), sheet_name=None, keep_default_na=False)
     assert list(book) == list(sheets)

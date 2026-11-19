@@ -58,6 +58,12 @@ def item_column(group, item):
     return f'{group}｜{item}'
 
 
+def item_label(column):
+    """整合性チェックの列名（`グループ｜項目`）に対応する、照合明細の「項目」。図面の対応は項目だけ、ほかは `グループ 項目`。"""
+    group, item = column.split('｜')
+    return item if group == '図面の対応' else f'{group} {item}'
+
+
 ITEM_COLUMNS = [item_column(g, i) for g, i in ITEMS]
 
 # 判断根拠に書く決まった語
@@ -1041,7 +1047,7 @@ def _evaluate_row(ctx, list_name, row):
 
 def _orphan_cells(cable, wire_drawings, schematic_drawings):
     """一覧表に無いケーブル（線番設定表・展開接続図にだけある）のセル。一覧表だけ ×、ほかは －。"""
-    cells = {col: [_Cell(col.replace('｜', ' '), note='一覧表に無いケーブル')] for col in ITEM_COLUMNS}
+    cells = {col: [_Cell(item_label(col), note='一覧表に無いケーブル')] for col in ITEM_COLUMNS}
     parts = []
     if wire_drawings:
         parts.append(f'線番設定表（{"、".join(wire_drawings)}）')

@@ -23,6 +23,8 @@ PRIMARY = os.path.abspath(os.path.join(PROJECT, '..', 'DXF-extract-labels'))
 SHARED_FILES = (
     'model/extract_labels.py',
     'model/common_utils.py',
+    'model/region_detector.py',
+    'model/label_classifier.py',
 )
 
 

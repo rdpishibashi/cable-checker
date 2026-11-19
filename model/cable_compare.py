@@ -1,17 +1,11 @@
-"""展開接続図(405)とケーブル製作図(393)から出力した Excel のケーブルを比較するモデル層（streamlit 非依存）。
+"""展開接続図(405)とケーブル製作図(393)から抽出したケーブル番号の比較（モデル層。streamlit 非依存）。
 
-入力は `excel_output.build_workbook()` が作る Excel の `ケーブル一覧` シート（図番・ケーブル番号）。
-シート名・列名は excel_output の定数を使い、出力の形と入力の仕様がずれないようにする。
+入力は `extract_cables()` の結果のリスト（図番・タイトル・サブタイトル・ケーブル）。ケーブル番号ごとに両方の図番を並べ（`compare_cables`）、
+393 の図面をタイトル／サブタイトルでグループ分けしてグループごとにも突き合わせる（`compare_groups`）。整合性チェックの Excel に入る。
 """
 import re
 import unicodedata
 from collections import Counter
-
-import openpyxl
-
-from .excel_output import LIST_COLUMNS, LIST_SHEET, SUMMARY_COLUMNS, SUMMARY_SHEET
-
-DRAWING_COL, CABLE_COL = LIST_COLUMNS[0], LIST_COLUMNS[1]
 
 ONLY_405, ONLY_393, BOTH = '405only', '393only', 'both'
 
@@ -19,57 +13,18 @@ NO_TITLE_GROUP = '（タイトルなし）'
 _DASHES = re.compile('[-\u2010-\u2015\u2212\u30fc\uff70]')  # ハイフン・ダッシュ・長音（ケ－ブル／ケーブルの表記ゆれ）
 
 
-def _normalize_cable(value):
-    """全角→半角（NFKC）・前後の空白除去・大文字化。"""
-    return unicodedata.normalize('NFKC', str(value)).strip().upper()
+def cable_map(results):
+    """抽出結果のリスト（`extract_cables()` の戻り値）を {ケーブル番号: [図番…]}（図番は昇順・重複なし）にする。ケーブルが0件の図面は現れない。"""
+    mapping = {}
+    for r in results:
+        for c in r['cables']:
+            mapping.setdefault(c['cable'], set()).add(r['drawing_number'])
+    return {cable: sorted(drawings) for cable, drawings in mapping.items()}
 
 
-def _text(value):
-    return '' if value is None else str(value).strip()
-
-
-def _open_workbook(source, label):
-    if hasattr(source, 'seek'):
-        source.seek(0)  # 同じファイルを続けて読めるように
-    try:
-        return openpyxl.load_workbook(source, read_only=True, data_only=True)
-    except Exception as e:  # noqa: BLE001 - 壊れた xlsx は種類が多い（BadZipFile・InvalidFileException 等）
-        raise ValueError(f'{label}: Excelファイル(.xlsx)として読み込めません（{type(e).__name__}）') from e
-
-
-def read_cable_list(source, label):
-    """Excel の `ケーブル一覧` シートを {ケーブル番号: [図番, …]} に読む。
-
-    Args:
-        source: ファイルオブジェクト（アップロード）またはパス。
-        label: エラーメッセージに出す呼び名（例: '展開接続図のExcel'）。
-    Returns:
-        図番は昇順・重複なし。図番かケーブル番号が空の行は読み飛ばす。0行でも正常（空の辞書）。
-    Raises:
-        ValueError: 読めない・シートが無い・列名が違うとき（何が悪いかを書いた日本語）。
-    """
-    wb = _open_workbook(source, label)
-    try:
-        if LIST_SHEET not in wb.sheetnames:
-            raise ValueError(
-                f'{label}: 「{LIST_SHEET}」シートがありません。'
-                'このアプリが出力したExcelファイルを指定してください。')
-        rows = wb[LIST_SHEET].iter_rows(values_only=True)
-        header = next(rows, None) or ()
-        names = [_text(h) for h in header]
-        for col in (DRAWING_COL, CABLE_COL):
-            if col not in names:
-                raise ValueError(f'{label}: 「{LIST_SHEET}」シートに「{col}」列がありません。')
-        i_drawing, i_cable = names.index(DRAWING_COL), names.index(CABLE_COL)
-        result = {}
-        for row in rows:
-            drawing = _text(row[i_drawing]) if i_drawing < len(row) else ''
-            cable = _normalize_cable(row[i_cable]) if i_cable < len(row) and row[i_cable] is not None else ''
-            if drawing and cable:
-                result.setdefault(cable, set()).add(drawing)
-        return {cable: sorted(drawings) for cable, drawings in result.items()}
-    finally:
-        wb.close()
+def drawing_titles(results):
+    """抽出結果のリストを {図番: (タイトル, サブタイトル)} にする（グループ分け用）。"""
+    return {r['drawing_number']: ((r['title'] or '').strip(), (r['subtitle'] or '').strip()) for r in results}
 
 
 def compare_cables(map_405, map_393):
@@ -94,35 +49,6 @@ def status(row):
     return ONLY_405 if row['drawings_405'] else ONLY_393
 
 
-def read_drawing_titles(source, label):
-    """Excel の `Summary` シートを {図番: (タイトル, サブタイトル)} に読む（グループ分け用）。
-
-    Raises:
-        ValueError: 読めない・シートが無い・列名が違うとき。
-    """
-    wb = _open_workbook(source, label)
-    try:
-        if SUMMARY_SHEET not in wb.sheetnames:
-            raise ValueError(
-                f'{label}: 「{SUMMARY_SHEET}」シートがありません。'
-                'このアプリが出力したExcelファイルを指定してください。')
-        rows = wb[SUMMARY_SHEET].iter_rows(values_only=True)
-        names = [_text(h) for h in (next(rows, None) or ())]
-        idx = []
-        for col in SUMMARY_COLUMNS[:3]:  # 図番・タイトル・サブタイトル
-            if col not in names:
-                raise ValueError(f'{label}: 「{SUMMARY_SHEET}」シートに「{col}」列がありません。')
-            idx.append(names.index(col))
-        result = {}
-        for row in rows:
-            cells = [_text(row[i]) if i < len(row) else '' for i in idx]
-            if cells[0]:
-                result[cells[0]] = (cells[1], cells[2])
-        return result
-    finally:
-        wb.close()
-
-
 def group_key(title, subtitle):
     """グループの識別キー。サブタイトルがあればそれ、無ければタイトル。表記ゆれ（全角半角・長音・空白・大小文字）を吸収する。
 
@@ -137,8 +63,8 @@ def compare_groups(map_405, map_393, titles):
     """ケーブル製作図の図面をタイトル／サブタイトルでグループ分けし、グループごとに 405 全体と突き合わせる。
 
     Args:
-        map_405, map_393: `read_cable_list()` の結果。
-        titles: `read_drawing_titles()` の結果。Summary に無い図面はタイトルなし扱い。
+        map_405, map_393: `cable_map()` の結果。
+        titles: `drawing_titles()` の結果。無い図面はタイトルなし扱い。
     Returns:
         [{'name': 表示名, 'drawings': [図番…], 'rows': compare_cables() の結果}, …] 表示名の昇順。
         ケーブルのある図面（map_393 に現れる図面）だけが対象。表示名はグループ内で最も多い元の表記（同数なら先の図番）。
@@ -160,3 +86,14 @@ def compare_groups(map_405, map_393, titles):
         result.append({'name': name, 'drawings': g['drawings'],
                        'rows': compare_cables(map_405, sub_393)})
     return sorted(result, key=lambda r: r['name'])
+
+
+def compare_extracts(results_405, results_393):
+    """405 と 393 の抽出結果を比較する。
+
+    Returns:
+        {'rows': 全体の突き合わせ（`compare_cables`）, 'groups': 393 の図面のグループごとの突き合わせ（`compare_groups`）}
+    """
+    map_405, map_393 = cable_map(results_405), cable_map(results_393)
+    return {'rows': compare_cables(map_405, map_393),
+            'groups': compare_groups(map_405, map_393, drawing_titles(results_393))}

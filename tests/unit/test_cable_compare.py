@@ -1,89 +1,31 @@
-"""cable_compare（Excel の読み込みと突き合わせ）の単体テスト。
-
-入力の xlsx は excel_output.build_workbook() で作る（出力の形と入力の仕様が食い違わないことも守る）。
-"""
-import io
-
-import openpyxl
+"""cable_compare（抽出結果からの突き合わせとグループ分け）の単体テスト。"""
 import pytest
 
 from model.cable_compare import (
-    BOTH, ONLY_393, ONLY_405, compare_cables, compare_groups, group_key, read_cable_list,
-    read_drawing_titles, status,
+    BOTH, ONLY_393, ONLY_405, cable_map, compare_cables, compare_extracts, compare_groups, drawing_titles, group_key,
+    status,
 )
-from model.excel_output import build_workbook
 
 
-def result(drawing, cables):
-    return {'drawing_number': drawing, 'title': '', 'subtitle': '',
+def result(drawing, cables, title='', subtitle=''):
+    return {'drawing_number': drawing, 'title': title, 'subtitle': subtitle,
             'cables': [{'cable': c, 'remark': 'x'} for c in cables]}
 
 
-def xlsx(results):
-    return io.BytesIO(build_workbook(results))
-
-
-def raw_xlsx(sheets):
-    """{シート名: [行…]} から素の xlsx を作る（出力の形に従わない入力用）。"""
-    wb = openpyxl.Workbook()
-    wb.remove(wb.active)
-    for name, rows in sheets.items():
-        ws = wb.create_sheet(name)
-        for row in rows:
-            ws.append(row)
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
-
-
-def test_read_cable_list_round_trips_build_workbook():
-    """守るもの: build_workbook() の出力を、そのまま比較の入力として読める（出力と入力の仕様のずれ防止）。"""
-    got = read_cable_list(xlsx([
-        result('EE0001-405A', ['M39001', 'M39002']),
+def test_cable_map_lists_drawings_sorted_and_skips_drawings_without_cables():
+    """守るもの: ケーブル番号 → 図番（昇順・重複なし）。ケーブルが0件の図面はどこにも現れない。"""
+    got = cable_map([
         result('EE0002-405A', ['M39001']),
+        result('EE0001-405A', ['M39001', 'M39002', 'M39002']),
         result('EE0003-405A', []),
-    ]), '展開接続図のExcel')
+    ])
     assert got == {'M39001': ['EE0001-405A', 'EE0002-405A'], 'M39002': ['EE0001-405A']}
+    assert cable_map([]) == {}
 
 
-def test_read_cable_list_normalizes_and_skips_blank_rows():
-    """守るもの: ケーブル番号は全角→半角・空白除去・大文字化。空の図番・番号の行、重複行は無視。備考は読まない。"""
-    f = raw_xlsx({'ケーブル一覧': [
-        ['図番', 'ケーブル番号', '備考'],
-        ['EE0001-405A', ' ｍ３９００１ ', 'x'],
-        ['EE0001-405A', 'M39001', ''],
-        ['EE0002-405A', 'm39001', None],
-        [None, 'M39002', None],
-        ['EE0003-405A', None, None],
-        ['EE0003-405A', '', None],
-    ]})
-    assert read_cable_list(f, 'A') == {'M39001': ['EE0001-405A', 'EE0002-405A']}
-
-
-def test_read_cable_list_header_only_is_empty_not_error():
-    """守るもの: 見出しだけ（ケーブル0件）は正常で、空の辞書になる。"""
-    assert read_cable_list(raw_xlsx({'ケーブル一覧': [['図番', 'ケーブル番号', '備考']]}), 'A') == {}
-
-
-def test_read_cable_list_finds_columns_by_name_not_position():
-    f = raw_xlsx({'ケーブル一覧': [['備考', 'ケーブル番号', '図番'], ['r', 'M39001', 'EE0001-405A']]})
-    assert read_cable_list(f, 'A') == {'M39001': ['EE0001-405A']}
-
-
-@pytest.mark.parametrize('make, expected', [
-    (lambda: raw_xlsx({'Summary': [['図番']]}), 'ケーブル一覧」シートがありません'),
-    (lambda: raw_xlsx({'ケーブル一覧': [['図番', '備考']]}), '「ケーブル番号」列がありません'),
-    (lambda: raw_xlsx({'ケーブル一覧': [['ケーブル番号', '備考']]}), '「図番」列がありません'),
-    (lambda: raw_xlsx({'ケーブル一覧': []}), '列がありません'),
-    (lambda: io.BytesIO(b'not an xlsx'), '読み込めません'),
-])
-def test_read_cable_list_errors_name_the_file_and_the_problem(make, expected):
-    """守るもの: 読めない入力は ValueError で、どのファイルの何が悪いかが分かる文言になる。"""
-    with pytest.raises(ValueError) as e:
-        read_cable_list(make(), '展開接続図のExcel')
-    assert '展開接続図のExcel' in str(e.value)
-    assert expected in str(e.value)
+def test_drawing_titles_strips_and_treats_none_as_empty():
+    got = drawing_titles([result('D1', [], ' T ', ' S '), {'drawing_number': 'D2', 'title': None, 'subtitle': None, 'cables': []}])
+    assert got == {'D1': ('T', 'S'), 'D2': ('', '')}
 
 
 def test_compare_both_and_only_sides_with_blank_lists():
@@ -120,24 +62,6 @@ def test_compare_with_empty_side():
 
 
 # ---- グループ分け ----------------------------------------------------------------------------
-def titled(drawing, title, subtitle, cables):
-    return {'drawing_number': drawing, 'title': title, 'subtitle': subtitle,
-            'cables': [{'cable': c, 'remark': ''} for c in cables]}
-
-
-def test_read_drawing_titles_round_trips_build_workbook():
-    """守るもの: Summary シートの図番・タイトル・サブタイトルを読める（出力と入力の仕様のずれ防止）。"""
-    src = xlsx([titled('EE0001-339A', 'T', 'ケーブル一覧表', ['M39001']), titled('EE0002-339A', '線番設定表', '', [])])
-    assert read_drawing_titles(src, 'x') == {'EE0001-339A': ('T', 'ケーブル一覧表'), 'EE0002-339A': ('線番設定表', '')}
-
-
-def test_read_drawing_titles_errors():
-    with pytest.raises(ValueError, match='「Summary」シートがありません'):
-        read_drawing_titles(raw_xlsx({'Sheet1': [['a']]}), '393')
-    with pytest.raises(ValueError, match='「サブタイトル」列がありません'):
-        read_drawing_titles(raw_xlsx({'Summary': [['図番', 'タイトル']]}), '393')
-
-
 @pytest.mark.parametrize('a, b', [
     (('', 'ケ－ブル一覧表'), ('', 'ケーブル一覧表')),   # 全角ハイフン／長音
     (('', 'ＡＢＣ 一覧'), ('', 'abc一覧')),             # 全角・空白・大小文字
@@ -170,3 +94,15 @@ def test_compare_groups_unknown_drawing_and_no_cables():
     """守るもの: Summary に無い図面はタイトルなしグループ。ケーブルが全く無ければグループなし。"""
     assert [g['name'] for g in compare_groups({}, {'M1': ['D9']}, {})] == ['（タイトルなし）']
     assert compare_groups({'M1': ['E1']}, {}, {}) == []
+
+
+def test_compare_extracts_compares_cables_and_groups_the_393_drawings():
+    """守るもの: 抽出結果から、全体の突き合わせと、393 のサブタイトル優先のグループ別の突き合わせを1回で作る（405 は全体と突き合わせる）。"""
+    r405 = [result('E1', ['M1', 'M9'])]
+    r393 = [result('D1', ['M1'], title='線番設定表'), result('D2', ['M1', 'M2'], title='SYS', subtitle='ケーブル一覧表'),
+            result('D3', [], title='ケーブル製作図')]
+    got = compare_extracts(r405, r393)
+    assert [(r['cable'], status(r)) for r in got['rows']] == [('M1', BOTH), ('M2', ONLY_393), ('M9', ONLY_405)]
+    assert [(g['name'], g['drawings']) for g in got['groups']] == [('ケーブル一覧表', ['D2']), ('線番設定表', ['D1'])]
+    assert [r['cable'] for r in got['groups'][0]['rows']] == ['M1', 'M2', 'M9']        # グループの比較は 405 全体と
+    assert compare_extracts([], []) == {'rows': [], 'groups': []}

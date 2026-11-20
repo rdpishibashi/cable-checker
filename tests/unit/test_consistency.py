@@ -830,3 +830,53 @@ def test_marks_follow_each_comparison_symbol_and_wrong_values_turn_the_text_cros
     _res, row, marks = _marked(ds)
     assert row['cells'][item_column('端末1', '機器符号')] == NG
     assert marks[(LIST_NAME, 'TBF9Z')] == NG and marks[(WIRE_NAME, 'RACK\nTBR1B')] == NG
+
+
+def _conn(pin1, pin2, label, segs):
+    return {'端の数': 2, '端1_線番': '', '端1_PIN No.': pin1, '端2_PIN No.': pin2, 'ラベル': label, '_segs': segs}
+
+
+def _shaped_schematic(tmp_conn_labels=('(BK)', '(WH)'), third_wire_without_end=False):
+    """図形つきの 405 の出現（ケーブル記号1つ・引出線・芯線2本〈ピン 1/A・2/B〉）と、製作図の接続2本（A/1・B/2）を持つ図面セット。"""
+    ds = build()
+    by_name(ds, FAB_NAME)['fab_notes'] = []
+    by_name(ds, FAB_NAME)['fab_conns'] = [_conn('A', '1', tmp_conn_labels[0], [[(0.0, 0.0), (10.0, 0.0)]]),
+                                          _conn('B', '2', tmp_conn_labels[1], [[(0.0, 5.0), (10.0, 5.0)]])]
+    near = [('CN1', 0.0, 'CN1')]
+    wires = []
+    for n, pin, y in (('1', 'A', 0.0), ('2', 'B', 5.0)):
+        w = wire(end('circle', 'TBR1B', n, regions=['RACK']), end('box', 'CN1', pin, nearby=near), labels=['(BK)'])
+        w['_path'] = [[(100.0, y), (120.0, y)]]
+        w['ends']['-']['_shape'] = {'circle': ((100.0, y), 1.0)}
+        w['ends']['+']['_shape'] = {'rect': (120.0, y - 1, 130.0, y + 1)}
+        wires.append(w)
+    if third_wire_without_end:
+        w = wire(end('circle', 'TBR1B', '3', regions=['RACK']), end(kind=None), labels=['(BK)'])
+        w['_path'] = [[(100.0, 9.0), (120.0, 9.0)]]
+        wires.append(w)
+    occ = occurrence(wires)
+    occ['_leader'] = [[(110.0, 20.0), (110.0, 8.0)]]
+    occ['_symbols'] = [{'shape': 'ellipse', 'box': (108.0, 0.0, 112.0, 6.0)}]
+    return with_schematic(ds, occ=occ)
+
+
+def test_shapes_for_the_viewer_follow_the_wire_judgements_and_skip_wires_without_both_ends():
+    """守るもの: 行の `shapes`（viewer の図形）。製作図の接続の線と展開接続図の芯線は、割り当てた接続の PIN・線番・色の判定のうち最も重い記号
+    （色 (WH)≠(BK) の芯線は ×、合う芯線は ○）。引出線・記号は「図面の対応｜展開接続図」、端末の枠・円は機器符号の記号。
+    端末の無い芯線は塗らない（取りこぼしより誤りを避ける）。"""
+    _res, row = run(_shaped_schematic())
+    kinds = [(s['drawing'], s['kind'], s['symbol']) for s in row['shapes']]
+    fab = [(k, s) for d, k, s in kinds if d == FAB_NAME]
+    assert sorted(fab) == sorted([('lines', OK), ('lines', NG)])                     # (BK) の接続 ○、(WH) は 405 のラベルに無く ×
+    wires = [s for s in row['shapes'] if s['drawing'] == SCH_NAME and s['item'] == '芯線']
+    assert sorted(s['symbol'] for s in wires) == sorted([NG, OK])
+    leader = [s for s in row['shapes'] if s['item'] == '図面の対応｜展開接続図']
+    assert {s['kind'] for s in leader} == {'lines', 'ellipse'} and {s['symbol'] for s in leader} == {OK}
+    ends = [s for s in row['shapes'] if s['kind'] in ('rect', 'circle')]
+    assert sorted((s['kind'], s['item']) for s in ends) == [('circle', '端末1｜機器符号')] * 2 + [('rect', '端末2｜機器符号')] * 2
+
+    _res, row = run(_shaped_schematic(third_wire_without_end=True))
+    paths = [s for s in row['shapes'] if s['drawing'] == SCH_NAME and s['item'] == '芯線']
+    assert len(paths) == 2                                                   # 端末の無い3本目は出ない
+    _res, row = run(with_schematic(build()))
+    assert [s for s in row['shapes'] if s['drawing'] == SCH_NAME] == []      # `_path` などが無い（旧形式）ときは図形なし

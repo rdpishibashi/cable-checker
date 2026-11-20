@@ -369,3 +369,17 @@ def test_drawing_without_text_skips_all_readers(tmp_path, monkeypatch):
     d = consistency.analyze_drawing(str(path), 'EE0001-001-01A')
     assert d['no_text'] and d['kinds'] == []
     assert consistency.check_consistency([d])['rows'] == []
+
+
+def test_fab_connection_keeps_its_wire_segments_for_the_viewer(tmp_path):
+    """守るもの: 接続（`_segs`。Excel には出ない）は、つないだ電線の線分そのもの（viewer の図形の重ね書き）。折れ曲がった電線は全線分を持つ。"""
+    doc, msp = fab_doc()
+    line(msp, (50, 94), (100, 94))
+    line(msp, (50, 86), (75, 86))
+    line(msp, (75, 86), (75, 80))
+    line(msp, (75, 80), (100, 80))
+    line(msp, (100, 80), (100, 86))
+    res, _pairs = conns(tmp_path, doc)
+    rows = {r['端1_行']: r for r in fab_drawing.connection_rows(res)}
+    assert rows[1]['_segs'] == [[(50.0, 94.0), (100.0, 94.0)]]
+    assert len(rows[2]['_segs']) == 4 and all(len(seg) == 2 for seg in rows[2]['_segs'])

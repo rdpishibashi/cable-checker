@@ -395,7 +395,7 @@ def link_labels(g, labels, arrows, grid):
                 tip = verts[0]
                 v = (verts[0][0] - verts[1][0], verts[0][1] - verts[1][1])
                 L = math.hypot(*v) or 1
-                best = (d, {'tip': tip, 'dir': (v[0] / L, v[1] / L), 'leader_entity': True}, [])
+                best = (d, {'tip': tip, 'dir': (v[0] / L, v[1] / L), 'leader_entity': True, 'verts': list(verts)}, [])
         if best:
             lab['arrow'] = best[1]
             lab['chain'] = best[2]
@@ -522,7 +522,7 @@ def find_symbols(g, grid, lab):
     P = a['tip']
     hit = _symbol_at(g, grid, P)
     if hit:
-        return [{'box': hit[0], 'color': hit[2]}], hit[1]
+        return [{'box': hit[0], 'color': hit[2], 'shape': hit[1]}], hit[1]
     skip = set(lab.get('chain', [])) | set(a.get('heads', ()))
     lines = [k for k in grid.near(P, 0.5) if k not in skip and pt_seg_dist(P, g.segs[k].a, g.segs[k].b) < 0.3]
     # 矢印に垂直な線（シールドの破線・円筒の側面・芯線）を優先
@@ -540,7 +540,7 @@ def find_symbols(g, grid, lab):
                             h = (_bbox(c.pts), 'ellipse', c.color)
                             break
                 if h:
-                    syms.append({'box': h[0], 'color': h[2]})
+                    syms.append({'box': h[0], 'color': h[2], 'shape': h[1]})
                     break
         if syms:
             return syms, 'via-line'
@@ -741,7 +741,7 @@ def circle_terminal(g, E):
     cands = [t for t in g.txts if len(t.s) >= 3 and re.search('[A-Z]', t.s) and not t.s.startswith('(')
              and 0 <= t.y0 - ty <= 6 and t.x0 - 3 <= tx <= t.x1 + 3]
     nt = min(cands, key=lambda t: t.y0 - ty) if cands else None
-    return {'rect': None, 'pin': pin, 'connector': nt.s if nt else None, 'kind': 'circle', 'center': (cx, cy),
+    return {'rect': None, 'pin': pin, 'connector': nt.s if nt else None, 'kind': 'circle', 'center': (cx, cy), 'radius': circ.size[0] / 2,
             'name_pt': (nt.cx, nt.cy) if nt else None, 'pin_t': pin_t, 'name_t': nt}
 
 
@@ -807,8 +807,8 @@ def nearby_symbols(g, lab, max_d=12.0):
                     if d < max_d and (best is None or d < best[0]):
                         best = (d, c, c2)
     if best:
-        return [{'box': _bbox(best[1].pts), 'color': best[1].color},
-                {'box': _bbox(best[2].pts), 'color': best[2].color}], 'beside'
+        return [{'box': _bbox(best[1].pts), 'color': best[1].color, 'shape': 'ellipse'},
+                {'box': _bbox(best[2].pts), 'color': best[2].color, 'shape': 'ellipse'}], 'beside'
     return [], 'none'
 
 
@@ -947,7 +947,20 @@ def _term_points(term, inner):
 
 
 def _empty_end():
-    return {'kind': None, 'name': None, 'pin': None, 'regions': [], 'devices': [], 'nearby': [], '_refs': {}}
+    return {'kind': None, 'name': None, 'pin': None, 'regions': [], 'devices': [], 'nearby': [], '_refs': {}, '_shape': None}
+
+
+def _term_shape(term):
+    """端末の図形（viewer の重ね書き用）: コネクタ枠は {'rect': (x0, y0, x1, y1)}、端子の円は {'circle': ((cx, cy), 半径)}。接地などは None。"""
+    if term.get('rect'):
+        return {'rect': tuple(term['rect'])}
+    if term.get('center') and term.get('radius'):
+        return {'circle': (tuple(term['center']), term['radius'])}
+    return None
+
+
+def _segs_of(g, ks):
+    return [[tuple(g.segs[k].a), tuple(g.segs[k].b)] for k in ks]
 
 
 def _end_info(g, grid, device_rects, regions, E, term, inner):
@@ -988,7 +1001,7 @@ def _end_info(g, grid, device_rects, regions, E, term, inner):
             'pin': term['pin_t'].ref if term.get('pin_t') else None,
             'regions': region_refs, 'devices': device_refs, 'nearby': nearby_refs}
     return {'kind': term['kind'], 'name': term['connector'], 'pin': term['pin'],
-            'regions': names, 'devices': devices, 'nearby': nearby, '_refs': refs}
+            'regions': names, 'devices': devices, 'nearby': nearby, '_refs': refs, '_shape': _term_shape(term)}
 
 
 # 図中の参照: 「to POWER LINE (SYSTEM I/F BOX) (-405-08)」のように、括弧の中の `-英数字3-英数字2` が参照先の図番（の一部）を示す。
@@ -1062,6 +1075,10 @@ def analyze_schematic(path, name):
     for lab in labels:
         symbols, how = find_symbols(g, grid, lab)
         wires, seen = [], set()
+        arrow = lab.get('arrow') or {}
+        leader = (_segs_of(g, list(lab.get('chain', [])) + list(arrow.get('heads', ())))
+                  + [[tuple(p), tuple(q)] for p, q in zip(arrow.get('verts', []), arrow.get('verts', [])[1:])])
+        sym_shapes = [{'shape': sym.get('shape', 'ellipse'), 'box': tuple(sym['box'])} for sym in symbols if 'box' in sym]
         for sym in symbols:
             if 'wire' in sym:
                 ks, box = [sym['wire']], None
@@ -1075,13 +1092,15 @@ def analyze_schematic(path, name):
                 seen.add(k)
                 d = g.segs[k].dir()
                 horiz = abs(d[0]) >= abs(d[1])
-                ends = {}
+                ends, path_all = {}, []
                 for E, _reason, path_ in trace_wire(g, grid, k):
+                    path_all += [j for j in path_ if j not in path_all]
                     side = '-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+'
                     term = terminal_at(g, rects, E, g.segs[path_[-1]].dir())   # 曲がった芯線は端の線分の向き
                     ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E))
                 wl = wire_label_texts(g, k, box)
-                wires.append({'labels': [t.s for t in wl], 'ends': ends, '_label_refs': [t.ref for t in wl]})
+                wires.append({'labels': [t.s for t in wl], 'ends': ends, '_label_refs': [t.ref for t in wl],
+                              '_path': _segs_of(g, path_all)})
         out['occurrences'].append({'cable': lab['cable'], 'remark': lab['remark'], 'how': how, 'wires': wires,
-                                   '_label_ref': lab['txt'].ref})
+                                   '_label_ref': lab['txt'].ref, '_leader': leader, '_symbols': sym_shapes})
     return out

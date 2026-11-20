@@ -313,3 +313,45 @@ def test_analyze_schematic_returns_references_found_in_the_drawing(tmp_path):
     path = build(tmp_path, extras=lambda msp: _text(msp, 'to POWER LINE (SYSTEM I/F BOX) (-405-08)', 30, 40))
     assert read(path)['refs'] == [{'pattern': '-405-08', 'text': 'to POWER LINE (SYSTEM I/F BOX) (-405-08)'}]
     assert read(build(tmp_path, name='EE0000-405-02A'))['refs'] == []
+
+
+@pytest.mark.parametrize('symbol', ['ellipse', 'capsule'])
+def test_shapes_for_the_viewer_symbol_leader_wire_paths_and_connector_frames(tmp_path, symbol):
+    """守るもの: viewer の図形の重ね書きに使う座標（`_` 始まり。Excel には出ない）。出現はケーブル記号の種類と外接矩形（`_symbols`）と引出線
+    の線分（`_leader`）、芯線は経路の線分（`_path`。芯線の線分を含む）、端はコネクタ枠の矩形（`_shape`）を持つ。判定（how・端末）は変わらない。"""
+    occ = occurrence(read(build(tmp_path, symbol)))
+    assert [s['shape'] for s in occ['_symbols']] == [symbol] and len(occ['_symbols'][0]['box']) == 4
+    assert occ['_leader'] and all(len(seg) == 2 for seg in occ['_leader'])
+    for wire in occ['wires']:
+        assert wire['_path'] and all(len(seg) == 2 for seg in wire['_path'])
+        for side in '-+':
+            shape = wire['ends'][side]['_shape']
+            assert shape and len(shape['rect']) == 4
+    x0, y0, x1, y1 = occ['_symbols'][0]['box']
+    path = [p for w in occ['wires'] for seg in w['_path'] for p in seg]
+    assert min(p[0] for p in path) < x0 and max(p[0] for p in path) > x1       # 芯線は記号の両側へ伸びる
+
+
+def test_circle_terminal_shape_has_center_and_radius_and_gnd_has_none(tmp_path):
+    """守るもの: 端子の円は {'circle': (中心, 半径)}（半径は円の外接の半分）、接地は図形なし（文字の強調だけ）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _box(msp, 0, 0, 9, 11)
+    _line(msp, (9, 8), (49, 8))
+    _line(msp, (9, 3), (49, 3))
+    _text(msp, '1', 4.5, 8)
+    _text(msp, '2', 4.5, 3)
+    _text(msp, 'CN1', 4.5, 13.5)
+    msp.add_circle((50, 8), 1, dxfattribs={'color': 2})
+    _text(msp, '1', 50, 5.5)
+    _text(msp, 'TBR1B', 50, 12)
+    _text(msp, 'GND', 53, 3)
+    msp.add_ellipse((30, 5.5, 0), major_axis=(0, 4.5, 0), ratio=0.3, dxfattribs={'color': 2})
+    _arrow(msp, (30, 10), 19.5)
+    _text(msp, f'W No.{CABLE}', 22, 19.5, ap=7)
+    path = tmp_path / 'EE0000-405-01A.dxf'
+    doc.saveas(path)
+    ends = {w['ends']['+']['kind']: w['ends']['+'] for w in occurrence(read(str(path)))['wires']}
+    (cx, cy), r = ends['circle']['_shape']['circle']
+    assert (round(cx, 1), round(cy, 1), round(r, 1)) == (50.0, 8.0, 1.0)
+    assert ends['gnd']['_shape'] is None

@@ -267,6 +267,19 @@ def test_fab_tables_and_straight_connections_with_label(tmp_path):
     assert first['端1_位置'] == '左' and first['端2_位置'] == '右'
 
 
+def test_fab_note_block_is_not_a_matching_text_but_stays_in_all_texts(tmp_path):
+    """守るもの: 注記の文章ブロック（先頭行に「注記」）は、記載の照合と強調に使う `text_refs` に入れない（文中の `Module` が種類 `UL` に部分一致して
+    注記ブロック全体が ○ になった。EE3298-574-72C）。図中の参照を探す全文字 `texts` には残す。"""
+    doc, msp = fab_doc()
+    text(msp, '(注記)\n1. Module No.はケーブル一覧表参照の事。', 60, 60, 2.5)
+    text(msp, 'UL1007 AWG18', 60, 40, 2.5)
+    res = fab_drawing.parse(load(doc, tmp_path))
+    refs = [t for t, _ in res['text_refs']]
+    assert 'UL1007 AWG18' in refs and not any('注記' in t for t in refs)
+    assert any('注記' in t for t in res['texts'])
+    assert fab_drawing.is_note_block('(注記)\n1. x') and not fab_drawing.is_note_block('1. x\n(注記)')
+
+
 def test_fab_struck_label_goes_to_deleted_labels(tmp_path):
     doc, msp = fab_doc()
     line(msp, (50, 94), (100, 94))

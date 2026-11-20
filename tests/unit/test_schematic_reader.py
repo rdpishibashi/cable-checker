@@ -162,6 +162,155 @@ def test_circle_terminal_gets_terminal_number_and_device_name_and_gnd_end(tmp_pa
     assert kinds['gnd']['name'] == 'GND'
 
 
+# ---------------------------------------------------------------- 細長いコネクタ枠（多ピン）
+
+def build_tall(tmp_path, label_box=False, name='EE0000-405-01A'):
+    """左右のコネクタが高さ 111 の細長い1枠（幅 9）で描かれた図面。横の芯線2本（y=8・3）が、枠の辺（x=9・x=200）に着く。
+    label_box=True なら、右側の芯線の途中に、芯線に沿う横長のラベル枠（幅 75 × 高さ 5）を置く（x=20〜95、芯線はその両側で切れる）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _box(msp, 0, -100, 9, 11)
+    _box(msp, 200, -100, 209, 11)
+    for y, pin, label in ((8, '1', 'P021'), (3, '2', 'N244')):
+        if label_box and y == 8:
+            _line(msp, (9, y), (20, y))
+            _line(msp, (95, y), (200, y))
+            _box(msp, 20, 5.5, 95, 10.5, color=4)
+        else:
+            _line(msp, (9, y), (200, y))
+        _text(msp, pin, 4.5, y)
+        _text(msp, pin, 204.5, y)
+        _text(msp, label, 160, y + 0.5, ap=7)
+    _text(msp, 'CN1', 4.5, 13.5)
+    _text(msp, 'CN2', 204.5, 13.5)
+    msp.add_ellipse((150, 5.5, 0), major_axis=(0, 4.5, 0), ratio=0.3, dxfattribs={'color': 2})
+    _arrow(msp, (150, 10), 19.5)
+    _text(msp, f'W No.{CABLE}', 142, 19.5, ap=7)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def test_tall_narrow_connector_frames_are_terminals_with_pins_and_names(tmp_path):
+    """守るもの: 多ピンのコネクタは細長い1枠（幅 9 × 高さ 111。上限 60 を超える）で描かれ、芯線は枠の辺に着く。この枠が端末として読め、
+    ピン（芯線と同じ高さの文字）とコネクタ名が取れる（以前は枠が候補から落ち、両端が読めなかった。実図面 EE6888-604-01A の CNESCD・CN1）。"""
+    wires = by_label(occurrence(read(build_tall(tmp_path))))
+    assert set(wires) == {'P021', 'N244'}
+    for label, pin in (('P021', '1'), ('N244', '2')):
+        ends = wires[label]['ends']
+        assert (ends['-']['kind'], ends['-']['name'], ends['-']['pin']) == ('box', 'CN1', pin)
+        assert (ends['+']['kind'], ends['+']['name'], ends['+']['pin']) == ('box', 'CN2', pin)
+
+
+def test_tall_frame_unit_side_point_follows_the_wire_direction_not_the_frame_center(tmp_path, monkeypatch):
+    """守るもの: ユニット領域の根拠は、枠の辺からケーブルと反対側のすぐ外の点で調べる。その向きは芯線の向きで決める
+    （細長い枠は、枠の中心への向きで決めると上下を選び、領域の外の点になる）。左のコネクタ CN1（芯線は右へ出る）の左側の領域が取れる。
+    領域は、枠の中心（x=4.5）・名前の文字（y=13.5）を含まず、ユニット側の点（x=-0.6）だけを含む形にしてある。"""
+    region = {'polygon': [(-20, -110), (3, -110), (3, 12), (-20, 12)], 'area': 2806.0, 'name_candidates': [(1.0, 'UNIT A')]}
+    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg: {'regions': [region], 'minor_regions': []})
+    wires = by_label(occurrence(read(build_tall(tmp_path))))
+    assert wires['P021']['ends']['-']['regions'] == ['UNIT A']
+    assert wires['P021']['ends']['+']['regions'] == []
+
+
+def test_wide_label_box_along_the_wire_is_not_a_terminal(tmp_path):
+    """守るもの: 芯線に沿う細長い枠（芯線の途中に置いた配線名の枠。幅 75 × 高さ 5）は端末にしない。細長い枠を許すのは芯線に直交する向きだけ
+    （横の芯線なら縦長）。許すと配線名の枠（実図面 EE6888-650-01C の CM12）を端末と取り違え、ピンが読めなくなった。"""
+    wires = by_label(occurrence(read(build_tall(tmp_path, label_box=True))))
+    end = wires['P021']['ends']['-']
+    shape = end['_shape']
+    assert not shape or shape['rect'] != (20.0, 5.5, 95.0, 10.5)
+    assert end['name'] != 'CM12'
+
+
+# ---------------------------------------------------------------- コネクタの円（端子円）
+
+def build_circles(tmp_path, through=False, dots_only=False, d=3.98, name='EE0000-405-01A'):
+    """左右が円のコネクタ（直径 d。名前 CN1・CN2 を円の上に置く）で、中央にケーブル記号（楕円）がある図面。芯線は1本（y=8）。
+    through=False: 芯線は円の縁から縁まで。through=True: 1本の長い線（x=-20〜90）が円の中心を通り抜ける（円は線の途中に載る）。
+    dots_only=True: 大きなコネクタ円の代わりに、線の途中に接続点の小さな黒丸（直径 1）だけを置く。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    left, right = (0.0, 60.0)
+    r = d / 2
+    for x, label in ((left, 'CN1'), (right, 'CN2')):
+        msp.add_circle((x, 8), 0.5 if dots_only else r, dxfattribs={'color': 4})
+        if not dots_only:
+            _text(msp, label, x, 11)
+    a, b = (-20, 90) if through else (left + r, right - r)
+    _line(msp, (a, 8), (b, 8))
+    _text(msp, 'P021', 20, 8.5, ap=7)
+    msp.add_ellipse((30, 5.5, 0), major_axis=(0, 4.5, 0), ratio=0.3, dxfattribs={'color': 2})
+    _arrow(msp, (30, 10), 19.5)
+    _text(msp, f'W No.{CABLE}', 22, 19.5, ap=7)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def _ends_of(result):
+    (wire,) = [w for w in occurrence(result)['wires'] if w['labels'] == ['P021']]
+    return {s: (e['kind'], e['name']) for s, e in wire['ends'].items()}
+
+
+def test_connector_circle_wider_than_3_2_is_a_terminal(tmp_path):
+    """守るもの: コネクタの円は直径 3.98 のものがある（端子円の判定の上限は 4.2）。以前は 3.2 までで、芯線が円の縁に着いていても端末が読めず、
+    先の長い線の端（TB1）だけが端末になった（EE6888-604-01A の M74003〜M74005）。"""
+    assert _ends_of(read(build_circles(tmp_path))) == {'-': ('circle', 'CN1'), '+': ('circle', 'CN2')}
+
+
+def test_circle_larger_than_the_terminal_limit_is_not_a_terminal(tmp_path):
+    """守るもの: 上限（4.2）を超える円は端子にしない（円の大きさの上限が効いている）。"""
+    assert _ends_of(read(build_circles(tmp_path, d=5.0))) == {'-': (None, None), '+': (None, None)}
+
+
+def test_through_line_stops_at_the_first_terminal_circle_on_it(tmp_path):
+    """守るもの: コネクタの円が、記号から先まで通る1本の長い線の途中に載る図では、記号から外へ最初に出会う端子円で止める（線の端まで進んで
+    先の端子台を拾わない。EE6888-604-01A の M74006: CNHV- の円から CNHVA- の円までが HV- から TB1 まで続く1本の線の一部）。"""
+    assert _ends_of(read(build_circles(tmp_path, through=True))) == {'-': ('circle', 'CN1'), '+': ('circle', 'CN2')}
+
+
+def test_small_junction_dots_on_a_through_line_do_not_stop_the_wire(tmp_path):
+    """守るもの: 線の途中の接続点の黒丸（直径 1）は端子円ではないので、そこでは止めない（下限 1.9）。端は線の端のまま（端末なし）。"""
+    assert _ends_of(read(build_circles(tmp_path, through=True, dots_only=True))) == {'-': (None, None), '+': (None, None)}
+
+
+# ---------------------------------------------------------------- 1つのコネクタの端子どうしをつなぐ U 字の線（ジャンパ）
+
+def build_jumpers(tmp_path, name='EE0000-405-01A'):
+    """1つの細長いコネクタ CN**（幅 9 × 高さ 61。端子 5・6・8・9 の文字が枠の中）の端子 5-6 と 8-9 を、U 字の線（横→縦→横）でつなぐ図面。
+    長円のケーブル記号が、2つの U 字の横線をまとめて横切る（EE6886-614-01A の M65027 と同じ形）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _box(msp, 0, -61, 9, 0)
+    for pin, y in (('5', -5), ('6', -10), ('8', -20), ('9', -25)):
+        _text(msp, pin, 4.5, y)
+    _text(msp, 'CN**', 4.5, 2.5)
+    for ya, yb in ((-5, -10), (-20, -25)):
+        _line(msp, (9, ya), (26, ya))
+        _line(msp, (26, ya), (26, yb))
+        _line(msp, (26, yb), (9, yb))
+    msp.add_arc((22, -2), 1.5, 0, 180, dxfattribs={'color': 2})
+    msp.add_arc((22, -28), 1.5, 180, 360, dxfattribs={'color': 2})
+    _line(msp, (20.5, -28), (20.5, -2), 2)
+    _line(msp, (23.5, -28), (23.5, -2), 2)
+    _arrow(msp, (22, -0.5), 8)
+    _text(msp, f'W No.{CABLE}', 14, 8, ap=7)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def test_u_shaped_jumper_wires_read_both_pins_of_the_same_connector_once_each(tmp_path):
+    """守るもの: 両端が同じコネクタに着く U 字の線は、1本ずつ数え（同じ線を U 字の2つの横線から二度たどらない）、両端のピン（5/6・8/9）と
+    コネクタ名が読める（以前は4本に数えて、U 字の線とコネクタの辺で閉じた小さな長方形を枠と取り違え、名前を隣のピン番号 `7`・`4` にし、
+    2つ目の端が1つ目を上書きした。EE6886-614-01A の M65027）。"""
+    occ = occurrence(read(build_jumpers(tmp_path)))
+    pins = sorted(tuple(sorted(w['ends'][s]['pin'] for s in '-+')) for w in occ['wires'])
+    assert pins == [('5', '6'), ('8', '9')]
+    assert all(w['ends'][s]['name'] == 'CN**' and w['ends'][s]['kind'] == 'box' for w in occ['wires'] for s in '-+')
+
+
 # ---------------------------------------------------------------- ユニットの根拠
 
 def test_region_name_candidates_of_every_candidate_are_collected_for_the_end(tmp_path, monkeypatch):

@@ -117,9 +117,9 @@ export default function(component) {
 
     S.legendHtml = '<h4>' + esc(d.title || d.fname || '図面') + '</h4>' + (d.legend || []).map((l) =>
       '<div class="lv-row"><span class="lv-sw" style="background:' + l[1] + '"></span><span>' + esc(l[0]) +
-      '</span><span class="lv-cnt">' + l[2] + ' 件</span></div>').join('') +
-      (d.shapes || []).map((s) => '<div class="lv-row"><span class="lv-line" style="border-top-color:' + s.color + '"></span><span>図形 ' + esc(s.symbol) +
-        '</span><span class="lv-cnt">' + s.count + ' 件</span></div>').join('') +
+      '</span></div>').join('') +
+      (d.shapeLegend || []).map((s) => '<div class="lv-row"><span class="lv-line" style="border-top-color:' + s[1] + '"></span><span>図形 ' + esc(s[0]) +
+        '</span></div>').join('') +
       (d.missing ? '<div class="lv-warn">図面上で見つからない文字 ' + d.missing + ' 件</div>' : '');
     let h = S.legendHtml +
       '<h4>操作</h4><button data-act="fit">全体表示</button>' +

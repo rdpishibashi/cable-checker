@@ -626,6 +626,24 @@ def axis_rects(g, min_size=2.0, max_size=80.0):
     return sorted(rects)
 
 
+NARROW_MAX = 15.0      # 細長い枠の短辺の上限
+NARROW_LONG_MAX = 250.0  # 細長い枠の長辺の上限
+
+
+def narrow_rects(g, min_size=2.0, short_max=NARROW_MAX, long_max=NARROW_LONG_MAX, plain_max=60.0):
+    """`axis_rects` の上限（plain_max）を超える、細長い矩形のコネクタ枠。(x0, y0, x1, y1) の一覧。
+
+    多ピンのコネクタは、幅 9 × 高さ 175 のような細長い1つの枠で描かれる（EE6888-604-01A の CNESCD・CN1）。
+    短辺が short_max 以下・長辺が plain_max 超〜long_max 以下のものだけを返す。どちらの向きの枠も返すので、
+    芯線との向きの関係（直交する枠だけを端末にする）は `terminal_at` が見る。"""
+    out = []
+    for r in axis_rects(g, min_size, long_max):
+        w, h = r[2] - r[0], r[3] - r[1]
+        if min(w, h) <= short_max and max(w, h) > plain_max:
+            out.append(r)
+    return out
+
+
 def trace_wire(g, grid, k, start_pt=None, max_steps=60):
     """芯線 k を両方向に端点でつながる線分でたどり、両端点と経路を返す。分岐点で止める。
 
@@ -668,8 +686,13 @@ def text_in(g, box, pad=0.0):
     return [t for t in g.txts if x0 - pad <= t.cx <= x1 + pad and y0 - pad <= t.cy <= y1 + pad]
 
 
-def terminal_at(g, rects, E, wire_dir):
-    """芯線の端点 E のコネクタ枠（E が枠の辺から 1.5 以内）、ピン番号、コネクタ名。"""
+def terminal_at(g, rects, E, wire_dir, narrow=()):
+    """芯線の端点 E のコネクタ枠（E が枠の辺から 1.5 以内）、ピン番号、コネクタ名。
+
+    narrow は `narrow_rects()` の細長い枠。**芯線に直交する向きの枠だけ**を候補に加える（横の芯線なら縦長の枠）。
+    芯線に沿う細長い枠は、芯線の途中に置いた配線名の枠（`CM12` など）で、端末ではない。"""
+    horiz_wire = abs(wire_dir[0]) > abs(wire_dir[1])
+    rects = list(rects) + [r for r in narrow if ((r[3] - r[1]) > (r[2] - r[0])) == horiz_wire]
     best = None
     for r in rects:
         x0, y0, x1, y1 = r
@@ -712,6 +735,37 @@ def terminal_at(g, rects, E, wire_dir):
     return {'rect': r, 'pin': pin, 'connector': name, 'kind': 'box', 'name_pt': name_pt, 'pin_t': pin_t, 'name_t': name_t}
 
 
+TERMINAL_CIRCLE_MAX = 4.2   # 端子円の直径の上限（コネクタの円は直径 3.98 のものがある）
+TERMINAL_CIRCLE_MIN = 1.9   # 芯線の途中で止める端子円の直径の下限（接続点の黒丸 0.5〜1.0 は除く）
+
+
+def clip_at_terminal_circle(g, E, side, horiz, box, tol=0.3):
+    """芯線の端 E より手前（ケーブル記号 box の側）に、線の上に載った端子円があれば、その円の縁（記号に向いた側）を端として返す。無ければ E。
+
+    コネクタの円が、記号から端子台まで通る1本の長い線の途中に載る図がある（EE6888-604-01A の M74006: CNHV- の円から CNHVA- の円までが
+    HV- から TB1 まで続く1本の線の一部）。線の端まで進むと、ケーブルの端末ではなく先の端子台（TB1）を拾うので、記号から外へ向かって
+    最初に出会う端子円で止める。side は '-'（記号の左／下）か '+'（右／上）、horiz は芯線が横向きか。"""
+    x0, y0, x1, y1 = box
+    along = 0 if horiz else 1                 # 芯線に沿う軸
+    lo, hi = (x0, x1) if horiz else (y0, y1)
+    found = []
+    for c in g.curves:
+        d = c.size[0]
+        if c.kind != 'CIRCLE' or not (TERMINAL_CIRCLE_MIN <= d <= TERMINAL_CIRCLE_MAX):
+            continue
+        if abs(c.center[1 - along] - E[1 - along]) > tol:
+            continue
+        a = c.center[along]
+        if side == '-' and E[along] - tol <= a < lo:
+            found.append((-a, a + d / 2))
+        elif side == '+' and hi < a <= E[along] + tol:
+            found.append((a, a - d / 2))
+    if not found:
+        return E
+    edge = min(found)[1]
+    return (edge, E[1]) if horiz else (E[0], edge)
+
+
 def circle_terminal(g, E):
     """芯線の端が小さな円（端子台の端子・ブレーカーの極）に触れるとき、端子番号と機器名。
 
@@ -720,7 +774,7 @@ def circle_terminal(g, E):
     """
     circ = None
     for c in g.curves:
-        if c.kind == 'CIRCLE' and c.size[0] <= 3.2:
+        if c.kind == 'CIRCLE' and c.size[0] <= TERMINAL_CIRCLE_MAX:
             r = c.size[0] / 2
             if abs(math.dist(E, c.center) - r) < 0.3 or math.dist(E, c.center) < r:
                 circ = c
@@ -731,7 +785,7 @@ def circle_terminal(g, E):
     near = [t for t in g.txts if len(t.s) <= 3 and math.dist((t.cx, t.cy), (cx, cy)) < 4]
     pin_t = min(near, key=lambda t: math.dist((t.cx, t.cy), (cx, cy))) if near else None
     pin = pin_t.s if pin_t else None
-    col = [c for c in g.curves if c.kind == 'CIRCLE' and abs(c.center[0] - cx) < 0.15 and c.size[0] <= 3.2]
+    col = [c for c in g.curves if c.kind == 'CIRCLE' and abs(c.center[0] - cx) < 0.15 and c.size[0] <= TERMINAL_CIRCLE_MAX]
     col.sort(key=lambda c: c.center[1])
     top = circ
     for c in col:                       # 上へ間隔 7 以内で続く円
@@ -807,13 +861,17 @@ def nearby_symbols(g, lab, max_d=12.0):
     return [], 'none'
 
 
-def inner_point(term, E):
-    """コネクタ枠の、ケーブルと反対側のすぐ外の点（ユニットの中）。円の端子は円の中心の反対側。"""
+def inner_point(term, E, wire_dir=None):
+    """コネクタ枠の、ケーブルと反対側のすぐ外の点（ユニットの中）。円の端子は円の中心の反対側。
+
+    枠のどの辺から出るかは、芯線の向き（wire_dir）で決める（細長い枠は中心への向きで決めると、辺の向きを取り違える）。
+    wire_dir が無いときは、枠の中心への向きで決める。"""
     if term and term.get('rect'):
         x0, y0, x1, y1 = term['rect']
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         dx, dy = cx - E[0], cy - E[1]
-        if abs(dx) >= abs(dy):
+        horiz = abs(wire_dir[0]) > abs(wire_dir[1]) if wire_dir is not None else abs(dx) >= abs(dy)
+        if horiz:
             return (x1 + 0.6, E[1]) if dx > 0 else (x0 - 0.6, E[1])
         return (E[0], y1 + 0.6) if dy > 0 else (E[0], y0 - 0.6)
     if term and term.get('center'):
@@ -1029,6 +1087,37 @@ def find_references(texts):
     return out
 
 
+def _rect_made_by(r, segs, tol=0.05):
+    """矩形 r の辺のどれかに、segs（芯線自身の線分）のどれかが全部載っているか。載っていれば、この矩形は芯線が作ったもの
+    （U 字の線とコネクタの辺で閉じた長方形）で、コネクタの枠ではない。"""
+    x0, y0, x1, y1 = r
+    for s in segs:
+        (ax, ay), (bx, by) = s.a, s.b
+        if abs(ay - by) < tol and (abs(ay - y0) < tol or abs(ay - y1) < tol) and x0 - tol <= min(ax, bx) and max(ax, bx) <= x1 + tol:
+            return True
+        if abs(ax - bx) < tol and (abs(ax - x0) < tol or abs(ax - x1) < tol) and y0 - tol <= min(ay, by) and max(ay, by) <= y1 + tol:
+            return True
+    return False
+
+
+def _loop_ends(g, grid, device_rects, regions, rects, narrow, traces, path_all, side):
+    """両端が記号の同じ側に着く芯線（U 字のジャンパ線。EE6886-614-01A の M65027: 1つのコネクタの端子 5 と 6 をつなぐ）の両端。
+
+    芯線自身が作る長方形（U 字の線＋コネクタの辺）はコネクタの枠にしない。両端のコネクタが見つかったときだけ、2つ目の端を反対側のキーに入れて
+    返す（同じキーだと後の端が前の端を上書きし、ピンが片方しか残らない）。どちらかの端が見つからなければ None（従来の読み方に戻す）。"""
+    own = [g.segs[j] for j in path_all]
+    wire_rects = [r for r in rects if not _rect_made_by(r, own)]
+    infos = []
+    for E, _reason, path_ in traces:
+        wire_dir = g.segs[path_[-1]].dir()
+        term = terminal_at(g, wire_rects, E, wire_dir, narrow)
+        if not term or term.get('kind') != 'box':
+            return None
+        infos.append(_end_info(g, grid, device_rects, regions, E, term, inner_point(term, E, wire_dir)))
+    other = '+' if side == '-' else '-'
+    return {side: infos[0], other: infos[1]}
+
+
 def analyze_schematic(path, name):
     """1枚の展開接続図を読み、ケーブル番号の出現ごとの芯線と両端の事実を返す。
 
@@ -1065,6 +1154,7 @@ def analyze_schematic(path, name):
 
     grid = Grid(g.segs)
     rects = axis_rects(g, 2.0, 60.0)             # コネクタ枠・端子台
+    narrow = narrow_rects(g)                     # 細長いコネクタ枠（芯線に直交するものだけ端末にする）
     device_rects = axis_rects(g, 2.0, 150.0)     # 機器の箱
     labels = link_labels(g, cable_labels(g), find_arrows(g, grid), grid)
     for lab in labels:
@@ -1087,12 +1177,22 @@ def analyze_schematic(path, name):
                 seen.add(k)
                 d = g.segs[k].dir()
                 horiz = abs(d[0]) >= abs(d[1])
-                ends, path_all = {}, []
-                for E, _reason, path_ in trace_wire(g, grid, k):
+                traces = trace_wire(g, grid, k)
+                path_all = []
+                for _E, _reason, path_ in traces:
                     path_all += [j for j in path_ if j not in path_all]
-                    side = '-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+'
-                    term = terminal_at(g, rects, E, g.segs[path_[-1]].dir())   # 曲がった芯線は端の線分の向き
-                    ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E))
+                seen.update(path_all)           # 同じ芯線（U 字の線など）を、別の線分から二度たどらない
+                sides = ['-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+' for E, _r, _p in traces]
+                ends = None
+                if len(traces) == 2 and sides[0] == sides[1]:
+                    ends = _loop_ends(g, grid, device_rects, regions, rects, narrow, traces=traces, path_all=path_all, side=sides[0])
+                if ends is None:
+                    ends = {}
+                    for (E, _reason, path_), side in zip(traces, sides):
+                        if box:
+                            E = clip_at_terminal_circle(g, E, side, horiz, box)
+                        term = terminal_at(g, rects, E, g.segs[path_[-1]].dir(), narrow)   # 曲がった芯線は端の線分の向き
+                        ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E, g.segs[path_[-1]].dir()))
                 wl = wire_label_texts(g, k, box)
                 wires.append({'labels': [t.s for t in wl], 'ends': ends, '_label_refs': [t.ref for t in wl],
                               '_path': _segs_of(g, path_all)})

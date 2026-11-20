@@ -5,6 +5,7 @@
 図中の参照の一致（405・393 の両方、改訂記号違い）。
 """
 import io
+from pathlib import Path
 
 import ezdxf
 
@@ -103,7 +104,7 @@ def test_viewer_data_colors_marked_texts_by_symbol_and_leaves_others_white():
     data = cable_preview.build_viewer_data(base, 'f.dxf', marks)
     assert {c[2] for c in data['items']} == {'#ffd400', '#ff3030'}          # AAA は同じ文字の ○ と △ のうち重い △（黄）
     assert data['counts'] == {'△': 1, '×': 1} and data['missing'] == 1 and data['marked'] is True     # 「関連」のマークは表示しない
-    assert [(l[0], l[2]) for l in data['legend']] == [('× 不整合', 1), ('△ 一致（根拠が弱い）', 1)]   # M39001・M39002 は白のまま
+    assert [(l[0], l[2]) for l in data['legend']] == [('△ 一致（根拠が弱い）', 1), ('× 不整合', 1)]   # M39001・M39002 は白のまま。凡例の順は ○ △ × ？
     plain = cable_preview.build_viewer_data(base, 'f.dxf')
     assert plain['marked'] is False and plain['count'] == 2 and {c[2] for c in plain['items']} == {cable_preview.CABLE_COLOR}
     assert plain['legend'] == [['ケーブル番号', cable_preview.CABLE_COLOR, 2]]
@@ -118,6 +119,21 @@ def test_focus_sections_carry_the_shapes_and_keep_a_drawing_that_has_only_shapes
     by = {s['drawing']: s for s in cable_focus.focus(result, 'M1', 'S1')}
     assert [s['kind'] for s in by['F1']['shapes']] == ['lines'] and by['S1']['shapes'][0]['symbol'] == '×'
     assert by['L1']['shapes'] == []
+
+
+def test_viewer_left_panel_legend_is_ordered_ok_weak_ng_unread_and_shapes_follow_in_the_same_order():
+    """守るもの（ユーザー指定）: viewer の左枠は、記号の行を ○ 一致 → △ 一致（根拠が弱い）→ × 不整合 → ？ 読めない の順に、続けて図形の行を ○ → △ → × → ？ の順に出す。
+    重さの順（× ？ △ ○）でも、図形を描く順（軽いほうから）でもない。件数は左枠に出さない（部品は `lv-cnt` を持たない）。"""
+    base = _base(['AAA', 'BBB', 'CCC', 'DDD'])
+    marks = [{'anchor': (10, 10), 'text': 'AAA', 'symbol': '？'}, {'anchor': (10, 20), 'text': 'BBB', 'symbol': '×'},
+             {'anchor': (10, 30), 'text': 'CCC', 'symbol': '○'}, {'anchor': (10, 40), 'text': 'DDD', 'symbol': '△'}]
+    shapes = [{'kind': 'rect', 'geom': (0.0, 0.0, 5.0, 5.0), 'symbol': s} for s in ('×', '？', '○', '△')]
+    data = cable_preview.build_viewer_data(base, 'f.dxf', marks, shapes=shapes)
+    assert [l[0] for l in data['legend']] == ['○ 一致', '△ 一致（根拠が弱い）', '× 不整合', '？ 読めない']
+    assert [s[0] for s in data['shapeLegend']] == ['○', '△', '×', '？']
+    assert [s['symbol'] for s in data['shapes']] != ['○', '△', '×', '？']           # 描画の順（軽いほうから）は別
+    js = (Path(__file__).resolve().parents[2] / 'view' / 'assets' / 'cable_viewer.js').read_text(encoding='utf-8')
+    assert 'lv-cnt' not in js
 
 
 def test_viewer_data_turns_shapes_into_svg_paths_in_viewbox_coordinates_ordered_by_severity():

@@ -140,11 +140,22 @@ def focus(result, cable: str, drawing_number: str) -> List[dict]:
         for name in sorted(order[role]) if role != ROLE_SCHEMATIC else [drawing_number] + sorted(set(order[role]) - {drawing_number}):
             items = marks.get((role, name), [])
             # 「関連」（照合の範囲）だけで判定の記号が無い図面は、viewer に出しても色が付かないので並べない
-            figs = shapes.get((role, name), [])
+            figs = _dedupe_shapes(shapes.get((role, name), []))
             if not any(m['symbol'] != RELATED for m in items) and not figs and not (role == ROLE_SCHEMATIC and name == drawing_number):
                 continue
             sections.append({'role': role, 'drawing': name, 'marks': items, 'shapes': figs, 'counts': symbol_counts(items)})
     return sections
+
+
+def _dedupe_shapes(figs):
+    """同じ図形（種類と座標が同じ）は1つにする。一覧表の行が複数あるケーブルでは同じ出現・同じ接続を行ごとに照合するので、重いほうの記号を残す。"""
+    best: Dict[tuple, dict] = {}
+    for f in figs:
+        key = (f['kind'], repr(f['geom']))
+        cur = best.get(key)
+        if cur is None or cable_preview._SYMBOL_RANK[f['symbol']] < cable_preview._SYMBOL_RANK[cur['symbol']]:
+            best[key] = f
+    return list(best.values())
 
 
 def _role_of(drawing: Optional[dict], f: Optional[dict], name: str) -> Optional[str]:

@@ -137,3 +137,12 @@ def test_viewer_data_turns_shapes_into_svg_paths_in_viewbox_coordinates_ordered_
     assert line == f"M {x0:.1f} {y0:.1f} L {x1:.1f} {y1:.1f}"
     assert next(s for s in data['shapes'] if s['symbol'] == '○')['d'].count('A') == 2 + 4
     assert cable_preview.build_viewer_data(base, 'f.dxf')['shapes'] == []
+
+
+def test_identical_shapes_from_several_list_rows_are_merged_keeping_the_heavier_symbol():
+    """守るもの: 一覧表の行が複数あるケーブルは同じ図形が行ごとに出るので、1つにまとめる（重いほうの記号）。"""
+    result = synthetic_result()
+    fig = {'drawing': 'F1', 'kind': 'lines', 'geom': [[(0, 0), (1, 0)]], 'item': '芯線'}
+    result['rows'][0]['shapes'] = [{**fig, 'symbol': '○'}, {**fig, 'symbol': '×'}]
+    by = {s['drawing']: s for s in cable_focus.focus(result, 'M1', 'S1')}
+    assert [(f['kind'], f['symbol']) for f in by['F1']['shapes']] == [('lines', '×')]

@@ -32,13 +32,14 @@ from collections import Counter
 from . import cable_list_table, fab_drawing, wire_number_table
 from .cable_compare import compare_extracts
 from .cable_extractor import extract_cables
+from .cell_values import SEP, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
+from .cell_values import side as _side, squash as _squash, values as _values
 from .drawing_geometry import load
 from .schematic_reader import analyze_schematic
 from .symbols import NA, NG, OK, SEVERITY, SYMBOLS, UNREAD, WEAK  # noqa: F401  (公開名。他のモジュールとテストが consistency から使う)
 from .symbols import worst as _worst
 
 # 判定の記号・重さは symbols.py が正（ここから公開名として使えるようにそのまま import する）
-SEP = cable_list_table.SEP
 
 KIND_LIST = 'ケーブル一覧表'
 KIND_WIRE = '線番設定表'
@@ -59,10 +60,6 @@ ITEMS = [
     ('ケーブル', '種類'), ('ケーブル', '芯数'),
     ('芯線', '線番'), ('芯線', 'PIN'), ('芯線', '色'),
 ]
-
-
-def item_column(group, item):
-    return f'{group}｜{item}'
 
 
 def item_label(column):
@@ -239,19 +236,6 @@ def _with_temp_file(data, func):
 
 # ---------------------------------------------------------------- 照合の補助（パターンの解決など）
 
-def _squash(s):
-    return re.sub(r'\s+', '', s).upper()
-
-
-def _values(cell):
-    return [v.strip() for v in (cell or '').split(SEP) if v.strip()]
-
-
-def _codes(cell):
-    """機器符号のセルを、複数値（' | '）とカンマで分けた機器符号のリストにする。"""
-    return [c.strip() for v in _values(cell) for c in v.split(',') if c.strip()]
-
-
 def fab_pattern_regex(pattern):
     """一覧表の製作図パターン（`*` は任意の1文字）。末尾に改訂記号（英字1字）があってもよい。"""
     body = ''.join('[0-9A-Z]' if c == '*' else re.escape(c) for c in pattern.upper())
@@ -303,10 +287,6 @@ def schematic_targets(drawings):
 
 # ---------------------------------------------------------------- 照合の部品
 
-def _nfkc_squash(s):
-    return _squash(unicodedata.normalize('NFKC', s or ''))
-
-
 def _unit_key(s):
     """ユニット名の比較用: NFKC・括弧の補足と `*`（モジュールの伏せ字）を除く・空白を詰める・大文字。"""
     s = re.sub(r'\([^)]*\)', '', unicodedata.normalize('NFKC', s or ''))
@@ -318,16 +298,6 @@ def _module_key(module):
 
 
 _MODULE_TOKEN = re.compile(r'(?<![0-9A-Z])[FR]\d(?![0-9A-Z])')
-_COLOR_CODE = r'(?:BK|BN|RD|OG|YE|GN|BU|VT|GY|WH|PK|TQ|GNYE)'
-_COLOR_RE = re.compile(rf'^{_COLOR_CODE}(?:[/-]{_COLOR_CODE})*$')
-
-
-def _is_color(label):
-    """色のラベル: 括弧書き（`(BK)`・`(PK/BK)`・`桃(赤)`）か、色の記号だけ（`BU`・`GNYE`）。"""
-    s = unicodedata.normalize('NFKC', label or '').strip().upper()
-    return '(' in s or bool(_COLOR_RE.match(s))
-
-
 def _module_tokens(text):
     return set(_MODULE_TOKEN.findall(unicodedata.normalize('NFKC', text or '').upper()))
 
@@ -438,11 +408,6 @@ def _chain(row, by_name):
     ch['wire_ok'] = bool(ch['notes']) and ch['wire_problem'] is None
     ch['mine'] = _cable_wire_rows(cable, ch['wires']) if ch['wire_ok'] else []
     return ch
-
-
-def _side(orient, i):
-    """線番設定表の接続先のうち、端末 i（1・2）に対応する側（0=接続先1・1=接続先2）。fwd=接続先1が端末1、rev=接続先1が端末2。"""
-    return (i - 1) if orient == 'fwd' else (2 - i)
 
 
 def _select_wire_rows(row, mine):

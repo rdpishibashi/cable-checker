@@ -302,8 +302,6 @@ def build_workbook(result):
                     if values[0] == '記号' and values[sym_col] in sym_fmts:
                         ws.write(i, sym_col, values[sym_col], sym_fmts[values[sym_col]])
                         ws.write(i, viewer_col, values[viewer_col], viewer_fmts[values[sym_col]])
-                    elif values[0] == '記号':
-                        ws.write(i, viewer_col, values[viewer_col], viewer_fmts['関連'])
             elif name == WIRE_CHECK_SHEET:
                 cols = [list(frame.columns).index(c) for c in ('判定（PIN）', '判定（線番）', '判定（色）')]
                 for i, values in enumerate(frame.values.tolist(), start=1):

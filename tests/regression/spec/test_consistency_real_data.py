@@ -325,10 +325,10 @@ def test_cable_focus_m65206_acceptance(result):
     for s in secs:
         data = cable_preview.build_viewer_data(cable_preview.render_base_svg(_dxf_bytes(s['drawing'])), s['drawing'], s['marks'], cable='M65206')
         assert data['missing'] == 0 and data['marked'] and data['count'] > 0, s['drawing']
-    # 選ばなかった他のケーブル（M65202 など）の文字は白のまま（強調は選んだケーブルだけ）
-    legend = {l[0]: l[2] for l in cable_preview.build_viewer_data(
-        cable_preview.render_base_svg(_dxf_bytes('EE6892-610-01B')), 'x', secs[0]['marks'], cable='M65206')['legend']}
-    assert legend['関連（照合に使っていない）'] >= 1
+    # 「関連」（照合の範囲）は viewer に出さない。選ばなかった他のケーブル（M65202 など）の文字も白のまま
+    legend = [l[0] for l in cable_preview.build_viewer_data(
+        cable_preview.render_base_svg(_dxf_bytes('EE6892-610-01B')), 'x', secs[0]['marks'], cable='M65206')['legend']]
+    assert legend == ['× 不整合', '△ 一致（根拠が弱い）', '○ 一致']
 
 
 def test_cable_focus_every_cable_of_every_schematic_has_matching_texts(result):

@@ -277,6 +277,8 @@ def apply_marks(base: BaseRender, marks, cable: Optional[str] = None) -> Tuple[l
     best: Dict[int, str] = {}
     missing = 0
     for m in marks:
+        if m['symbol'] == RELATED:   # 「関連」は照合の範囲を示す内部の区分で、Excel に無いので viewer には出さない
+            continue
         cands = by_anchor.get(tuple(round(v, 3) for v in m['anchor']), [])
         if len(cands) > 1:
             want = _squash(m['text'])
@@ -289,10 +291,6 @@ def apply_marks(base: BaseRender, marks, cable: Optional[str] = None) -> Tuple[l
             cur = best.get(id(t))
             if cur is None or _SYMBOL_RANK[m['symbol']] < _SYMBOL_RANK[cur]:
                 best[id(t)] = m['symbol']
-    if cable:   # 選んだケーブル番号を含む文字は、ほかに記号が無ければ「関連」
-        for t in base.texts:
-            if any(c['cable'] == cable for c in find_cables([t['text']])):
-                best.setdefault(id(t), RELATED)
     items, counts = [], {}
     for t in base.texts:
         sym = best.get(id(t))
@@ -307,7 +305,7 @@ def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cabl
     """viewer 部品に渡す data（JSON 化できる dict）を作る。
 
     marks が None: ケーブル番号を含む文字を赤にする（選んだケーブルが無いとき）。
-    marks あり: マークの記号の色で文字を塗る（`apply_marks`。cable を含む文字は記号が無ければ「関連」）。他の文字は白。
+    marks あり: マークの記号の色で文字を塗る（`apply_marks`。「関連」のマークは表示しない）。他の文字は白。
     items: 色を変える文字の CSS クラス [[クラス名, 'fill'|'stroke', 色], ...]／legend: 凡例 [[ラベル, 色, 件数], ...]／
     count: 色を変えた文字の数／missing: 突き合わせできなかったマークの数／counts: 記号ごとの件数（見出しに使う）。"""
     if marks is None:

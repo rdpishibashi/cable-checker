@@ -133,7 +133,8 @@ def focus(result, cable: str, drawing_number: str) -> List[dict]:
     for role in (ROLE_SCHEMATIC, ROLE_LIST, ROLE_WIRE, ROLE_FAB):
         for name in sorted(order[role]) if role != ROLE_SCHEMATIC else [drawing_number] + sorted(set(order[role]) - {drawing_number}):
             items = marks.get((role, name), [])
-            if not items and not (role == ROLE_SCHEMATIC and name == drawing_number):
+            # 「関連」（照合の範囲）だけで判定の記号が無い図面は、viewer に出しても色が付かないので並べない
+            if not any(m['symbol'] != RELATED for m in items) and not (role == ROLE_SCHEMATIC and name == drawing_number):
                 continue
             sections.append({'role': role, 'drawing': name, 'marks': items, 'counts': symbol_counts(items)})
     return sections

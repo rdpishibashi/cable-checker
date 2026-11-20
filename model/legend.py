@@ -13,7 +13,6 @@ SYMBOL_ROWS = [
     (C.UNREAD, '読めない（図面で確認が必要。端のラベルが取れない等）。', '薄い青', '青'),
     (C.NA, '対象外・対象なし（一覧表の値が空、根拠となる図面が無い等）。セルの記号は、その項目の比較のうち最も重いもの（× ＞ ？ ＞ △ ＞ ○ ＞ －）。', '色なし', '紫'),
 ]
-VIEWER_ONLY = [('関連', 'viewer だけの色。選んだケーブルに関連するが、照合に使っていない文字（線番設定表の選ばなかった行・展開接続図の使わなかった出現・一覧表の他の列など）。', '（Excel には無い）', '紫')]
 
 # 項目ごとの判定（記号 → 条件）。キーは `consistency.item_column()` の列名
 _O, _W, _N, _U, _A = C.OK, C.WEAK, C.NG, C.UNREAD, C.NA
@@ -74,7 +73,6 @@ COLUMNS = ['区分', '項目', '記号・語', '意味・条件', 'Excel のセ�
 def legend_rows():
     """「記号の説明」シートの行（COLUMNS の順）。"""
     rows = [['記号', '記号', sym, meaning, excel, viewer] for sym, meaning, excel, viewer in SYMBOL_ROWS]
-    rows += [['記号', '記号', sym, meaning, excel, viewer] for sym, meaning, excel, viewer in VIEWER_ONLY]
     for column in C.ITEM_COLUMNS:
         for sym in C.SYMBOLS:
             if sym in ITEM_RULES[column]:

@@ -96,14 +96,14 @@ def _base(texts):
 
 def test_viewer_data_colors_marked_texts_by_symbol_and_leaves_others_white():
     """守るもの: マークがあるときは、記号の色（○緑・△黄・×赤・？青・－と関連は紫）の文字だけ色が変わり、凡例は記号ごとの件数。
-    選んだケーブルを含む文字は記号が無くても「関連」。マークがない（None）ときは今までどおりケーブル番号が赤。"""
+    「関連」のマークは viewer に出さない（Excel に無い区分）。マークがない（None）ときは今までどおりケーブル番号が赤。"""
     base = _base(['W No.M39001', 'AAA', 'BBB', 'W No.M39002'])
-    marks = [{'anchor': (10, 20), 'text': 'AAA', 'symbol': '○'}, {'anchor': (10, 30), 'text': 'BBB', 'symbol': '×'},
+    marks = [{'anchor': (10, 40), 'text': 'W No.M39002', 'symbol': '関連'}, {'anchor': (10, 20), 'text': 'AAA', 'symbol': '○'}, {'anchor': (10, 30), 'text': 'BBB', 'symbol': '×'},
              {'anchor': (10, 20), 'text': 'AAA', 'symbol': '△'}, {'anchor': (99, 99), 'text': 'ZZZ', 'symbol': '？'}]
     data = cable_preview.build_viewer_data(base, 'f.dxf', marks, cable='M39001')
-    assert {c[2] for c in data['items']} == {'#ffd400', '#ff3030', '#c080ff'}          # AAA は同じ文字の ○ と △ のうち重い △（黄）
-    assert data['counts'] == {'△': 1, '×': 1, '関連': 1} and data['missing'] == 1 and data['marked'] is True
-    assert [(l[0], l[2]) for l in data['legend']] == [('× 不整合', 1), ('△ 一致（根拠が弱い）', 1), ('関連（照合に使っていない）', 1)]   # M39002 は白のまま
+    assert {c[2] for c in data['items']} == {'#ffd400', '#ff3030'}          # AAA は同じ文字の ○ と △ のうち重い △（黄）
+    assert data['counts'] == {'△': 1, '×': 1} and data['missing'] == 1 and data['marked'] is True     # 「関連」のマークは表示しない
+    assert [(l[0], l[2]) for l in data['legend']] == [('× 不整合', 1), ('△ 一致（根拠が弱い）', 1)]   # M39001・M39002 は白のまま
     plain = cable_preview.build_viewer_data(base, 'f.dxf')
     assert plain['marked'] is False and plain['count'] == 2 and {c[2] for c in plain['items']} == {cable_preview.CABLE_COLOR}
     assert plain['legend'] == [['ケーブル番号', cable_preview.CABLE_COLOR, 2]]

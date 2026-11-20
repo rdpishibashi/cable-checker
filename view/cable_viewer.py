@@ -1,4 +1,5 @@
-"""図面の viewer（streamlit 依存のビュー層）。ケーブル番号を含む文字を赤字で示す表示専用の部品。
+"""図面の viewer（streamlit 依存のビュー層）。文字と図形を色で強調する表示専用の部品（ケーブル未選択時はケーブル番号を赤字、
+選択時は照合の記号の色。`model/cable_preview.build_viewer_data()`）。
 
 別ウィンドウ・全画面で表示できる（部品の JS が持つ）。描画（`model/cable_preview.render_base_svg()`）は
 `st.cache_data` で、同じ DXF なら1回だけ。部品の HTML/CSS/JS は `view/assets/cable_viewer.{html,css,js}`

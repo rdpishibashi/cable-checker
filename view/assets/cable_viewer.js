@@ -7,18 +7,19 @@ export default function(component) {
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
   if (!S) {
-    S = parentElement.__cv = { sig: null, vb: null, vb0: null, drag: null };
+    S = parentElement.__cv = { sig: null, vb: null, vb0: null, drag: null, ovOn: true };
     const wrap = parentElement.querySelector('#cv-wrap');
     wrap.innerHTML =
       '<div class="lv-side" id="cv-side"></div>' +
       '<div class="cv-stage"><svg class="cv-cv" id="cv-cv" xmlns="' + NS + '" preserveAspectRatio="xMidYMid meet">' +
-      '<style id="cv-hl"></style><rect id="cv-bg" fill="#000"/><g id="cv-base"></g></svg>' +
+      '<style id="cv-hl"></style><rect id="cv-bg" fill="#000"/><g id="cv-ov"></g><g id="cv-base"></g></svg>' +
       '<div class="cv-note">線幅は拡大しても一定です</div></div>';
     S.wrap = wrap;
     S.svg = parentElement.querySelector('#cv-cv');
     S.side = parentElement.querySelector('#cv-side');
     const svg = S.svg;
     S.apply = () => { svg.setAttribute('viewBox', S.vb.join(' ')); };
+    S.ov = svg.querySelector('#cv-ov');
     const pt = S.pt = (e) => {
       const r = svg.getBoundingClientRect();
       const s = Math.max(S.vb[2] / r.width, S.vb[3] / r.height);
@@ -73,6 +74,7 @@ export default function(component) {
   const focusMarked = () => {
     const els = [];
     S.data.items.forEach((c) => S.svg.querySelectorAll('.' + c[0]).forEach((e) => els.push(e)));
+    if (S.ovOn) S.ov.querySelectorAll('path').forEach((e) => els.push(e));
     if (!els.length) return;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     els.forEach((e) => {
@@ -107,15 +109,22 @@ export default function(component) {
         (c[1] === 'fill' ? 'stroke:' + col + ';stroke-width:0.6px;vector-effect:non-scaling-stroke' : '') + '}');
     });
     S.svg.querySelector('#cv-hl').textContent = rules.join('\n');
+    // 図形（線・記号・端末）の重ね書き。色の太線を元の白い図面の下に敷く（白い線と色付きの文字は隠れない）
+    const PATH_STYLE = 'fill:none;stroke-width:6px;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round;opacity:.85;pointer-events:none';
+    S.ov.innerHTML = (d.shapes || []).map((s) => '<path d="' + s.d + '" style="' + PATH_STYLE + '" stroke="' + s.color + '"/>').join('');
+    S.ov.style.display = S.ovOn ? '' : 'none';
     S.apply();
 
     S.legendHtml = '<h4>' + esc(d.title || d.fname || '図面') + '</h4>' + (d.legend || []).map((l) =>
       '<div class="lv-row"><span class="lv-sw" style="background:' + l[1] + '"></span><span>' + esc(l[0]) +
       '</span><span class="lv-cnt">' + l[2] + ' 件</span></div>').join('') +
+      (d.shapes || []).map((s) => '<div class="lv-row"><span class="lv-line" style="border-top-color:' + s.color + '"></span><span>図形 ' + esc(s.symbol) +
+        '</span><span class="lv-cnt">' + s.count + ' 件</span></div>').join('') +
       (d.missing ? '<div class="lv-warn">図面上で見つからない文字 ' + d.missing + ' 件</div>' : '');
     let h = S.legendHtml +
       '<h4>操作</h4><button data-act="fit">全体表示</button>' +
-      (d.items.length ? '<button data-act="focus">強調箇所</button>' : '') + '<button data-act="fs">' +
+      (d.items.length || (d.shapes || []).length ? '<button data-act="focus">強調箇所</button>' : '') +
+      ((d.shapes || []).length ? '<button data-act="ov">図形 ' + (S.ovOn ? 'オフ' : 'オン') + '</button>' : '') + '<button data-act="fs">' +
       (document.fullscreenElement ? '全画面を終了' : '全画面') + '</button><button data-act="pop">別ウィンドウ</button><div id="cv-fsnote" style="color:#e8a"></div>' +
       '<div style="color:#888;margin-top:6px;line-height:1.5">ホイール: 拡大縮小<br>ドラッグ: 移動<br>ダブルクリック: 全体表示</div>' +
       (d.hasFont ? '' : '<div class="lv-warn" style="margin-top:8px">日本語フォントが見つからないため、日本語の文字は表示されません。</div>');
@@ -124,6 +133,7 @@ export default function(component) {
       const act = b.getAttribute('data-act');
       if (act === 'fit') { S.vb = S.vb0.slice(); S.apply(); return; }
       if (act === 'focus') { focusMarked(); return; }
+      if (act === 'ov') { S.ovOn = !S.ovOn; render(); return; }
       const note = S.side.querySelector('#cv-fsnote'); note.textContent = '';
       if (act === 'pop') { openPopup(note); return; }
       if (document.fullscreenElement) { document.exitFullscreen(); return; }

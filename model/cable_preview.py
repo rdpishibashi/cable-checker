@@ -313,7 +313,46 @@ def apply_marks(base: BaseRender, marks, cable: Optional[str] = None) -> Tuple[l
     return items, counts, missing
 
 
-def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cable=None) -> dict:
+def _f(v: float) -> str:
+    return f"{v:.1f}"
+
+
+def shape_paths(base: BaseRender, shapes) -> List[dict]:
+    """図形（`consistency` の行の shapes。DXF 座標）を、viewer の重ね書き用の SVG パス（viewBox 座標）にする。
+
+    shapes: [{'kind': 'lines'|'ellipse'|'capsule'|'rect'|'circle', 'geom', 'symbol'}]。
+    Returns: 記号ごとに1つにまとめた [{'d': パス, 'color': 色, 'symbol': 記号, 'count': 図形の数}]（重い記号ほど後＝上に描く: － → ○ → △ → ？ → ×）。"""
+    by_symbol: Dict[str, list] = {}
+    for sh in shapes:
+        kind, geom = sh['kind'], sh['geom']
+        if kind == 'lines':
+            d = ' '.join('M {} {} L {} {}'.format(*(_f(v) for p in seg for v in to_svg(base, *p))) for seg in geom)
+        elif kind == 'circle':
+            (cx, cy), r = geom
+            sx, sy = to_svg(base, cx, cy)
+            r *= base.scale
+            d = f"M {_f(sx - r)} {_f(sy)} A {_f(r)} {_f(r)} 0 1 0 {_f(sx + r)} {_f(sy)} A {_f(r)} {_f(r)} 0 1 0 {_f(sx - r)} {_f(sy)} Z"
+        else:
+            (ax, ay), (bx, by) = to_svg(base, geom[0], geom[1]), to_svg(base, geom[2], geom[3])
+            x0, x1, y0, y1 = min(ax, bx), max(ax, bx), min(ay, by), max(ay, by)
+            w, h = x1 - x0, y1 - y0
+            if kind == 'ellipse':
+                rx, ry, cy = w / 2, h / 2, (y0 + y1) / 2
+                d = f"M {_f(x0)} {_f(cy)} A {_f(rx)} {_f(ry)} 0 1 0 {_f(x1)} {_f(cy)} A {_f(rx)} {_f(ry)} 0 1 0 {_f(x0)} {_f(cy)} Z"
+            elif kind == 'capsule':
+                r = min(w, h) / 2
+                d = (f"M {_f(x0 + r)} {_f(y0)} L {_f(x1 - r)} {_f(y0)} A {_f(r)} {_f(r)} 0 0 1 {_f(x1)} {_f(y0 + r)} L {_f(x1)} {_f(y1 - r)} "
+                     f"A {_f(r)} {_f(r)} 0 0 1 {_f(x1 - r)} {_f(y1)} L {_f(x0 + r)} {_f(y1)} A {_f(r)} {_f(r)} 0 0 1 {_f(x0)} {_f(y1 - r)} "
+                     f"L {_f(x0)} {_f(y0 + r)} A {_f(r)} {_f(r)} 0 0 1 {_f(x0 + r)} {_f(y0)} Z")
+            else:
+                d = f"M {_f(x0)} {_f(y0)} L {_f(x1)} {_f(y0)} L {_f(x1)} {_f(y1)} L {_f(x0)} {_f(y1)} Z"
+        by_symbol.setdefault(sh['symbol'], []).append(d)
+    order = [RELATED, '－', '○', '△', '？', '×']
+    return [{'d': ' '.join(by_symbol[sym]), 'color': SYMBOL_TEXT_COLORS[sym], 'symbol': sym, 'count': len(by_symbol[sym])}
+            for sym in order if sym in by_symbol]
+
+
+def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cable=None, shapes=None) -> dict:
     """viewer 部品に渡す data（JSON 化できる dict）を作る。
 
     marks が None: ケーブル番号を含む文字を赤にする（選んだケーブルが無いとき）。
@@ -334,5 +373,5 @@ def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cabl
         "svg": base.inner_svg, "sig": f"{fname}:{len(base.inner_svg)}:{hash(base.inner_svg) & 0xffffffff}",
         "empty": base.empty, "hasFont": base.cjk_font is not None,
         "color": CABLE_COLOR, "items": items, "legend": legend, "count": count, "counts": counts, "missing": missing,
-        "marked": marks is not None,
+        "marked": marks is not None, "shapes": shape_paths(base, shapes or []),
     }

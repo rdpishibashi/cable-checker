@@ -47,13 +47,13 @@ def mount_viewer(**kwargs):
     return _get_cable_viewer(sig)(**kwargs)
 
 
-def render_cable_viewer(fname, dxf_bytes, key, marks=None, title=None, cable=None):
+def render_cable_viewer(fname, dxf_bytes, key, marks=None, title=None, cable=None, shapes=None):
     """図面 `dxf_bytes` を描いて表示する。marks が None ならケーブル番号を含む文字を赤字に、marks があれば記号の色で塗る
     （`cable_preview.build_viewer_data`）。読めない・描けない図面は警告だけを出す（ほかの図面の表示には影響しない）。"""
     try:
         with st.spinner(PREPARING_TEXT):
             base = render_base(dxf_bytes)
-            data = cable_preview.build_viewer_data(base, fname, marks, title, cable)
+            data = cable_preview.build_viewer_data(base, fname, marks, title, cable, shapes)
         data['height'] = CABLE_VIEWER_HEIGHT_PX
         mount_viewer(key=key, data=data, height=CABLE_VIEWER_HEIGHT_PX)
     except Exception as e:

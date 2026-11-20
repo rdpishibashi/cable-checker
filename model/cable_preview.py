@@ -1,4 +1,4 @@
-"""DXF の図面を SVG にし、ケーブル番号を含む文字を赤字で示す viewer のデータ（モデル層。streamlit 非依存）。
+"""DXF の図面を SVG にし、文字と図形を色で強調する viewer のデータ（モデル層。streamlit 非依存）。
 
 DXF-extract-labels の `model/region_preview.py`（領域確認 viewer の描画）から、図面の描画に必要な部分だけを
 移植した独立の派生（共有ファイルではない。同期しない）。領域検出・ラベル位置の突き合わせは持たない。
@@ -7,6 +7,10 @@ DXF-extract-labels の `model/region_preview.py`（領域確認 viewer の描画
 CSS クラスを作るので、そのクラスを文字の正規化テキストと対応づけて控え（`BaseRender.text_classes`）、SVG の
 中身は白に書き換える。viewer は、ケーブル番号を含む文字（`find_cables()` が1件以上返すもの）のクラスの
 色だけを CSS で赤に差し替える（描き直さない）。赤くなるのは**その文字全体**（番号の部分だけではない）。
+
+ケーブルを選んだとき（`build_viewer_data` に marks・shapes を渡す）は、照合の記号の色（`SYMBOL_TEXT_COLORS`）で塗る:
+文字は基準点（`drawing_geometry.text_anchor`）でマークに当てて色を変え（`apply_marks`）、図形（芯線・記号・端末・製作図の接続線）は
+DXF 座標を viewBox 座標に写して（`to_svg`）重ね書きの SVG パスにする（`shape_paths`）。詳細は docs/VIEWER.md。
 """
 import io
 import re

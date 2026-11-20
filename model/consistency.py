@@ -34,11 +34,10 @@ from .cable_compare import compare_extracts
 from .cable_extractor import extract_cables
 from .drawing_geometry import load
 from .schematic_reader import analyze_schematic
+from .symbols import NA, NG, OK, SEVERITY, SYMBOLS, UNREAD, WEAK  # noqa: F401  (公開名。他のモジュールとテストが consistency から使う)
+from .symbols import worst as _worst
 
-# 判定の記号
-OK, WEAK, NG, UNREAD, NA = '○', '△', '×', '？', '－'
-SYMBOLS = [OK, WEAK, NG, UNREAD, NA]
-SEVERITY = {NA: 0, OK: 1, WEAK: 2, UNREAD: 3, NG: 4}
+# 判定の記号・重さは symbols.py が正（ここから公開名として使えるようにそのまま import する）
 SEP = cable_list_table.SEP
 
 KIND_LIST = 'ケーブル一覧表'
@@ -420,10 +419,6 @@ class _Cell:
         if not self.comparisons:
             return self.note
         return '／'.join(f'{k} {s} {b}' for k, s, b in self.comparisons)
-
-
-def _worst(symbols):
-    return max(symbols, key=lambda s: SEVERITY[s], default=NA)
 
 
 # ---------------------------------------------------------------- 一覧表の行 → 図面のチェーン

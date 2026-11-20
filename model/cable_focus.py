@@ -10,8 +10,7 @@
 """
 from typing import Dict, List, Optional
 
-from . import cable_preview
-from .cable_preview import RELATED
+from .symbols import RELATED, rank
 from .consistency import SET_405, SET_393, wire_pattern_regex
 from .schematic_reader import find_references
 
@@ -153,7 +152,7 @@ def _dedupe_shapes(figs):
     for f in figs:
         key = (f['kind'], repr(f['geom']))
         cur = best.get(key)
-        if cur is None or cable_preview._SYMBOL_RANK[f['symbol']] < cable_preview._SYMBOL_RANK[cur['symbol']]:
+        if cur is None or rank(f['symbol']) < rank(cur['symbol']):
             best[key] = f
     return list(best.values())
 
@@ -179,7 +178,7 @@ def symbol_counts(marks) -> Dict[str, int]:
     for m in marks:
         key = tuple(m['anchor'])
         cur = best.get(key)
-        if cur is None or cable_preview._SYMBOL_RANK[m['symbol']] < cable_preview._SYMBOL_RANK[cur]:
+        if cur is None or rank(m['symbol']) < rank(cur):
             best[key] = m['symbol']
     counts: Dict[str, int] = {}
     for sym in best.values():

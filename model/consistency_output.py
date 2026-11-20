@@ -13,13 +13,14 @@ import io
 
 import pandas as pd
 
-from . import cable_list_table, cable_preview, legend
+from . import cable_list_table, legend
 from .compare_output import (ALL_SHEET, compare_frame, count_rows, group_sheet_names, status_formats,
                              write_compare_sheet)
 from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, NG, OK, SEP, SET_393,
                           SET_405, SYMBOLS, UNREAD, WEAK, _codes, _values, fab_text_rows, pattern_resolutions)
 from .consistency import _Ctx, _chain, _schematic_names
 from .excel_output import display_width
+from .symbols import EXCEL_COLORS, VIEWER_COLORS
 from .wire_number_table import split_unit_terminal
 
 EXCEL_FILENAME = 'cable_consistency.xlsx'
@@ -62,9 +63,7 @@ _END_FIELDS = ('種類', '名前', 'ピン', '領域', '機器')
 SCHEMATIC_COLUMNS = ['図番', 'ケーブル番号', '出現', '描き方', '備考', '芯線', 'ラベル',
                      *[f'端{s}_{x}' for s in '-+' for x in _END_FIELDS]]
 
-# 記号の色（背景, 文字）。Tools/CLAUDE.md「Excel Output Pattern」の明るい配色。－ は色なし
-SYMBOL_COLORS = {OK: ('#EAF7EC', '#006100'), WEAK: ('#FFF6D5', '#9C6500'), NG: ('#FEF1F5', '#9C0006'),
-                 UNREAD: ('#EAF1FB', '#1F4E79')}
+SYMBOL_COLORS = EXCEL_COLORS     # 記号 → Excel のセル色（背景, 文字）。定義は symbols.py
 
 # 内部リンクは1シートに 65,530 件まで。超えるときはリンクを付けず記号だけを書く
 _MAX_LINKS = 60000
@@ -304,7 +303,7 @@ def build_workbook(result):
         row_fmts = {s: book.add_format({'bg_color': bg, 'font_color': fg}) for s, (bg, fg) in SYMBOL_COLORS.items()}
         compare_fmts = status_formats(book)
         viewer_fmts = {k: book.add_format({'bg_color': c, 'font_color': '#000000', 'align': 'center'})
-                       for k, c in cable_preview.SYMBOL_TEXT_COLORS.items()}
+                       for k, c in VIEWER_COLORS.items() if k in SYMBOLS}
         for name, frame, compare_rows in sheet_plan(result):
             if name == CHECK_SHEET:
                 _write_check_sheet(writer, result, frame, header_fmt, sym_fmts)

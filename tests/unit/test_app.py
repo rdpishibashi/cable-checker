@@ -151,7 +151,7 @@ def test_405_set_alone_runs_extraction_and_comparison(tmp_path):
     run_check_click(at)
     assert not at.error
     sheets = at.selectbox(key='preview_sheet_check')
-    assert sheets.options[:6] == ['Summary', '記号の説明', '図面一覧', 'ケーブル抽出', 'All Diff', '整合性チェック']
+    assert sheets.options[:7] == ['Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', '整合性チェック']
     assert any('展開接続図 1 図面・ケーブル製作図 0 図面' in v and 'ケーブル番号 2 件（両方 0・展開接続図だけ 2・ケーブル製作図だけ 0）' in v
                and '一覧表の行 0 行' in v for v in values(at.caption))
     sheets.select('All Diff').run()
@@ -247,7 +247,7 @@ def test_downloaded_excel_has_the_same_sheets_as_the_preview(tmp_path):
     assert [b.proto.label for b in at.download_button] == ['分析結果ダウンロード']
     book = openpyxl.load_workbook(io.BytesIO(at.session_state['check_result']['xlsx']))
     assert book.sheetnames == at.selectbox(key='preview_sheet_check').options
-    assert book.sheetnames[1:6] == ['記号の説明', '図面一覧', 'ケーブル抽出', 'All Diff', '（タイトルなし） Diff']
+    assert book.sheetnames[1:7] == ['記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', '（タイトルなし） Diff']
 
 
 # ---------------------------------------------------------------- プレビュー

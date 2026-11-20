@@ -69,7 +69,7 @@ def read_check_sheet(result):
 def test_sheets_are_in_the_documented_order_and_columns():
     sheets = dict(preview_sheets(make_result()))
     assert list(sheets) == [
-        'Summary', '記号の説明', '図面一覧', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
+        'Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
         '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']
     assert [n for n in sheets if n in FIXED_SHEET_NAMES] == FIXED_SHEET_NAMES                 # 固定のシートは並びを保つ
     assert list(sheets[out.CHECK_SHEET].columns) == CHECK_COLUMNS == [
@@ -266,7 +266,7 @@ def test_extract_sheet_lists_every_cable_of_both_sets_with_remarks():
 def test_compare_sheets_are_all_diff_and_one_per_group_after_the_extract_sheet():
     """守るもの: All Diff と、393 のサブタイトル優先のグループごとの比較シートが、ケーブル抽出のあと・整合性チェックの前に入り、中身は今の比較と同じ列・値。"""
     sheets = dict(preview_sheets(make_result()))
-    assert list(sheets)[3:8] == ['ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック']
+    assert list(sheets)[4:9] == ['ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック']
     assert sheets['All Diff'].values.tolist() == [
         [CABLE, SCH_NAME, f'{WIRE_NAME}、{LIST_NAME}'], ['M70001', SCH_NAME, ''], ['M99999', '', WIRE_NAME]]
     assert list(sheets['All Diff'].columns) == ['ケーブル番号', '展開接続図の図番', 'ケーブル製作図の図番']
@@ -285,7 +285,7 @@ def test_group_sheet_names_do_not_collide_with_fixed_sheets():
     ds = build()
     result = with_extracts(check_consistency(ds), {'405': [], '393': [
         extract(n, [CABLE] if n == LIST_NAME else [], title='All') for n in sorted(d['drawing_number'] for d in ds)]})
-    assert [n for n, _ in preview_sheets(result)][4:6] == ['All Diff', 'All_2 Diff']
+    assert [n for n, _ in preview_sheets(result)][5:7] == ['All Diff', 'All_2 Diff']
 
 
 # ---------------------------------------------------------------- 形の保証
@@ -293,7 +293,7 @@ def test_group_sheet_names_do_not_collide_with_fixed_sheets():
 def test_empty_result_still_builds_all_sheets():
     result = with_extracts(check_consistency([]), {'405': [], '393': []})
     book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None)
-    assert list(book) == [*FIXED_SHEET_NAMES[:4], 'All Diff', *FIXED_SHEET_NAMES[4:]]
+    assert list(book) == [*FIXED_SHEET_NAMES[:5], 'All Diff', *FIXED_SHEET_NAMES[5:]]
 
 
 def test_every_preview_sheet_converts_to_arrow():
@@ -344,3 +344,16 @@ def test_legend_sheet_explains_every_symbol_item_and_basis_word():
     book = openpyxl.load_workbook(io.BytesIO(build_workbook(make_result())))
     ws = book['記号の説明']
     assert ws['C2'].value == '○' and ws['C2'].fill.fgColor.rgb.endswith('EAF7EC')
+
+
+def test_relation_sheet_lists_related_drawings_per_schematic_after_the_index_sheet():
+    """守るもの: 「図面の関係」は図面一覧の次。アップロードした展開接続図（405。図番順）ごとに、一覧表・線番設定表・製作図の図番を並べる
+    （接続図パターンが当たった展開接続図 → その一覧表の行の製作図 → 注記の線番設定表。関連が無ければ空欄）。"""
+    sheets = dict(preview_sheets(make_result()))
+    names = list(sheets)
+    assert names[names.index('図面一覧') + 1] == '図面の関係'
+    frame = sheets['図面の関係']
+    assert list(frame.columns) == ['展開接続図', 'ケーブル一覧表', '線番設定表', 'ケーブル製作図']
+    assert frame['展開接続図'].tolist() == sorted(frame['展開接続図'])
+    row = frame[frame['展開接続図'] == SCH_NAME].iloc[0]
+    assert row['ケーブル一覧表'] == LIST_NAME

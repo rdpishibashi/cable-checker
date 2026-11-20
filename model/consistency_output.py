@@ -16,8 +16,8 @@ import pandas as pd
 from . import cable_list_table, legend
 from .compare_output import (ALL_SHEET, compare_frame, count_rows, group_sheet_names, status_formats,
                              write_compare_sheet)
-from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, NG, OK, SEP, SET_393,
-                          SET_405, SYMBOLS, UNREAD, WEAK, drawing_relations, fab_text_rows, pattern_resolutions)
+from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, SEP, SET_393,
+                          SET_405, SYMBOLS, drawing_relations, fab_text_rows, pattern_resolutions)
 from .cell_values import codes as _codes, values as _values
 from .excel_output import display_width
 from .symbols import EXCEL_COLORS, VIEWER_COLORS

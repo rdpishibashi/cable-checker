@@ -11,7 +11,7 @@
 from typing import Dict, List, Optional
 
 from .symbols import RELATED, rank
-from .consistency import SET_405, SET_393, wire_pattern_regex
+from .consistency import SET_405, wire_pattern_regex
 from .schematic_reader import find_references
 
 ROLE_SCHEMATIC = '展開接続図'

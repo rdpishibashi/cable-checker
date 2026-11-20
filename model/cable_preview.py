@@ -24,6 +24,7 @@ from ezdxf.fonts import fonts as ezdxf_fonts
 
 from .cable_extractor import find_cables
 from .common_utils import is_invisible
+from .drawing_geometry import text_anchor
 from .extract_labels import extract_text_from_entity
 
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -39,7 +40,7 @@ CJK_FONT_CANDIDATES = [
 BASE_COLOR = "#ffffff"      # 図面全体の色（背景は黒）
 CABLE_COLOR = "#ff3030"     # ケーブル番号を含む文字の色（赤）
 # `BaseRender` の項目を変えたら上げる（view の cache_data のキーに含める）
-BASE_RENDER_VERSION = 1
+BASE_RENDER_VERSION = 2
 
 _TEXT_TYPES = ("TEXT", "MTEXT")
 _MTEXT_COLOR_CODE = re.compile(r"\\[Cc][0-9]+;?")  # 本文中の色指定（\C1; \c255;）。目印の色に置き換える
@@ -55,6 +56,8 @@ class BaseRender:
     empty: bool = False
     # 文字ごとの CSS クラス: [(NFKC 正規化した文字列, [[クラス名, 'fill'|'stroke'], ...]), ...]（文字1件につき1要素）
     text_classes: List[Tuple[str, list]] = field(default_factory=list)
+    # 文字1件ごと: {'text': 正規化した文字列, 'classes': [[クラス名, 'fill'|'stroke'], ...], 'anchor': 基準点（text_anchor）}
+    texts: List[dict] = field(default_factory=list)
 
 
 def _register_bundled_font() -> None:
@@ -135,7 +138,7 @@ def _lift_block_texts(doc) -> int:
     return len(lifted)
 
 
-def _assign_marker_colors(doc) -> Dict[str, Optional[str]]:
+def _assign_marker_colors(doc, marker_to_anchor=None) -> Dict[str, Optional[str]]:
     """モデル空間の TEXT/MTEXT すべてに、1件ごとに一意の「目印の色」を付ける。
 
     戻り値: {目印の色（'#rrggbb'）: NFKC 正規化した文字列（取れなければ None）}。
@@ -157,10 +160,12 @@ def _assign_marker_colors(doc) -> Dict[str, Optional[str]]:
             bgr = (rgb[2] << 16) | (rgb[1] << 8) | rgb[0]
             e.text = _MTEXT_COLOR_CODE.sub(lambda _m: "\\c%d;" % bgr, e.text)
         marker_to_text["#%02x%02x%02x" % rgb] = text or None
+        if marker_to_anchor is not None:
+            marker_to_anchor["#%02x%02x%02x" % rgb] = text_anchor(e)
     return marker_to_text
 
 
-def _rewrite_marker_styles(root, marker_to_text) -> List[Tuple[str, list]]:
+def _rewrite_marker_styles(root, marker_to_text, marker_to_anchor=None, texts_out=None) -> List[Tuple[str, list]]:
     """SVG の `<style>` のうち目印の色（fill/stroke）を使うクラスを白に書き換え、
     `[(正規化した文字列, [[クラス名, 'fill'|'stroke'], ...]), ...]` を返す（文字1件につき1要素）。"""
     per_marker: Dict[str, list] = {}
@@ -179,6 +184,10 @@ def _rewrite_marker_styles(root, marker_to_text) -> List[Tuple[str, list]]:
             body = body.replace(km.group(0), "%s: %s" % (kind, BASE_COLOR))
             per_marker.setdefault(marker, []).append([cls, kind])
         el.text = ".%s {%s}" % (cls, body)
+    if texts_out is not None:
+        for mk, cls in per_marker.items():
+            if marker_to_text[mk]:
+                texts_out.append({'text': marker_to_text[mk], 'classes': cls, 'anchor': (marker_to_anchor or {}).get(mk)})
     return [(marker_to_text[mk], cls) for mk, cls in per_marker.items() if marker_to_text[mk]]
 
 
@@ -199,7 +208,8 @@ def render_base_svg(dxf_bytes: bytes) -> BaseRender:
         return BaseRender(cjk_font=cjk_font, empty=True)
 
     _lift_block_texts(doc)
-    marker_to_text = _assign_marker_colors(doc)
+    marker_to_anchor: Dict[str, tuple] = {}
+    marker_to_text = _assign_marker_colors(doc, marker_to_anchor)
 
     def keep_base_color(entity, properties):
         # 文字の色は実体に付けた目印の色。文字以外は白
@@ -218,7 +228,8 @@ def render_base_svg(dxf_bytes: bytes) -> BaseRender:
         return BaseRender(cjk_font=cjk_font, empty=True)
 
     root = backend.get_xml_root_element(layout.Page(0, 0, layout.Units.mm))
-    text_classes = _rewrite_marker_styles(root, marker_to_text)
+    texts: List[dict] = []
+    text_classes = _rewrite_marker_styles(root, marker_to_text, marker_to_anchor, texts)
     vb = [float(v) for v in root.get("viewBox", "0 0 0 0").split()]
     parts: List[str] = []
     for child in root:
@@ -226,7 +237,7 @@ def render_base_svg(dxf_bytes: bytes) -> BaseRender:
             parts.append(ET.tostring(child, encoding="unicode"))
     return BaseRender(
         inner_svg="".join(parts), view_box=(vb[2], vb[3]),
-        cjk_font=cjk_font, text_classes=text_classes,
+        cjk_font=cjk_font, text_classes=text_classes, texts=texts,
     )
 
 
@@ -241,14 +252,73 @@ def cable_classes(base: BaseRender) -> Tuple[list, int]:
     return classes, n
 
 
-def build_viewer_data(base: BaseRender, fname: str) -> dict:
+# 照合の記号ごとの文字の色（Excel のセル色と対応: ○緑・△黄・×赤・？青。－ と「関連（照合に使っていない）」は紫）
+RELATED = '関連'
+SYMBOL_TEXT_COLORS = {'○': '#33dd66', '△': '#ffd400', '×': '#ff3030', '？': '#4da6ff', '－': '#c080ff', RELATED: '#c080ff'}
+SYMBOL_LABELS = {'○': '○ 一致', '△': '△ 一致（根拠が弱い）', '×': '× 不整合', '？': '？ 読めない', '－': '－ 対象外', RELATED: '関連（照合に使っていない）'}
+_SYMBOL_ORDER = ['×', '？', '△', '○', '－', RELATED]       # 重い順（同じ文字に複数の記号が付いたら先のもの）
+_SYMBOL_RANK = {sym: i for i, sym in enumerate(_SYMBOL_ORDER)}
+
+
+def _squash(s: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize('NFKC', s or '')).upper()
+
+
+def apply_marks(base: BaseRender, marks) -> Tuple[list, dict, int]:
+    """マーク（[{'anchor': (x, y), 'text': 文字, 'symbol': 記号|'関連'}]）を、描画した文字のクラスに対応づける。
+
+    突き合わせは基準点（`text_anchor`）。同じ基準点に文字が複数あるときだけ文字列（空白除去・大文字）で絞る。
+    Returns: (クラスと色 [[クラス名, 'fill'|'stroke', 色], ...], 記号ごとの文字の件数, 突き合わせできなかったマークの数)
+    同じ文字に複数の記号が付いたら重いほう。"""
+    by_anchor: Dict[tuple, list] = {}
+    for t in base.texts:
+        if t['anchor'] is not None:
+            by_anchor.setdefault(tuple(t['anchor']), []).append(t)
+    best: Dict[int, str] = {}
+    missing = 0
+    for m in marks:
+        cands = by_anchor.get(tuple(round(v, 3) for v in m['anchor']), [])
+        if len(cands) > 1:
+            want = _squash(m['text'])
+            exact = [t for t in cands if _squash(t['text']) == want or want in _squash(t['text'])]
+            cands = exact or cands
+        if not cands:
+            missing += 1
+            continue
+        for t in cands:
+            cur = best.get(id(t))
+            if cur is None or _SYMBOL_RANK[m['symbol']] < _SYMBOL_RANK[cur]:
+                best[id(t)] = m['symbol']
+    items, counts = [], {}
+    for t in base.texts:
+        sym = best.get(id(t))
+        if sym is None:
+            continue
+        counts[sym] = counts.get(sym, 0) + 1
+        items.extend([c[0], c[1], SYMBOL_TEXT_COLORS[sym]] for c in t['classes'])
+    return items, counts, missing
+
+
+def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None) -> dict:
     """viewer 部品に渡す data（JSON 化できる dict）を作る。
 
-    items: 赤にする文字の CSS クラス／count: ケーブル番号を含む文字の数／color: 赤の色。"""
-    items, count = cable_classes(base)
+    marks が None: ケーブル番号を含む文字を赤にする（選んだケーブルが無いとき）。
+    marks あり: マークの記号の色で文字を塗る（`apply_marks`）。他の文字は白。
+    items: 色を変える文字の CSS クラス [[クラス名, 'fill'|'stroke', 色], ...]／legend: 凡例 [[ラベル, 色, 件数], ...]／
+    count: 色を変えた文字の数／missing: 突き合わせできなかったマークの数／counts: 記号ごとの件数（見出しに使う）。"""
+    if marks is None:
+        classes, count = cable_classes(base)
+        items = [[c[0], c[1], CABLE_COLOR] for c in classes]
+        legend = [['ケーブル番号', CABLE_COLOR, count]]
+        counts, missing = {}, 0
+    else:
+        items, counts, missing = apply_marks(base, marks)
+        count = sum(counts.values())
+        legend = [[SYMBOL_LABELS[sym], SYMBOL_TEXT_COLORS[sym], counts[sym]] for sym in _SYMBOL_ORDER if sym in counts]
     return {
-        "fname": fname, "viewBox": [base.view_box[0], base.view_box[1]],
+        "fname": fname, "title": title or fname, "viewBox": [base.view_box[0], base.view_box[1]],
         "svg": base.inner_svg, "sig": f"{fname}:{len(base.inner_svg)}:{hash(base.inner_svg) & 0xffffffff}",
         "empty": base.empty, "hasFont": base.cjk_font is not None,
-        "color": CABLE_COLOR, "items": items, "count": count,
+        "color": CABLE_COLOR, "items": items, "legend": legend, "count": count, "counts": counts, "missing": missing,
+        "marked": marks is not None,
     }

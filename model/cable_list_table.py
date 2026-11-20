@@ -137,7 +137,7 @@ def _read_table(txts, segs):
 
     # 列ごとに、区切り線の無い行どうしを結合したセル（行の添字の範囲）を作る
     nrow = len(rows)
-    table = [{'_row': i + 1, '_deleted': {}, '_merged': []} for i in range(nrow)]
+    table = [{'_row': i + 1, '_deleted': {}, '_merged': [], '_refs': {}} for i in range(nrow)]
     for (x0, x1, g, sub, key) in cols:
         xm = (x0 + x1) / 2
         name = key or f'?{g}/{sub}'
@@ -159,6 +159,7 @@ def _read_table(txts, segs):
             for k in range(i, j + 1):
                 if cell:
                     table[k][name] = vals
+                    table[k]['_refs'][name] = [(t.s, t.ref) for t in live]   # 文字の位置（viewer の強調に使う）
                     if dead:
                         table[k]['_deleted'][name] = [norm(t.s) for t in dead]
                 if j > i:
@@ -180,7 +181,7 @@ def parse(geo):
         return None
     rows = []
     for r in res['rows']:
-        row = {'行': r['_row']}
+        row = {'行': r['_row'], '_refs': r['_refs']}
         for k in FIELDS:
             row[k] = SEP.join(r.get(k, []))
         row['削除された値'] = '; '.join(f"{k}:{'/'.join(v)}" for k, v in r['_deleted'].items())

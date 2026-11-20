@@ -26,6 +26,7 @@ class Txt:
     y1: float
     src: str            # 'msp' またはブロック名
     struck: bool = False
+    ref: tuple = None   # 文字の基準点（`text_anchor()`。viewer の文字との突き合わせに使う）
 
     @property
     def cx(self):
@@ -57,6 +58,19 @@ class Geometry:
     def copy_txts(self):
         """文字のコピー。読み取りごとに `struck`（削除済み）を別々に書き込むため、共有しない。"""
         return [replace(t) for t in self.txts]
+
+
+def text_anchor(e):
+    """文字（TEXT/MTEXT/ATTRIB）の基準点のワールド座標を、小数3桁に丸めて返す。
+
+    読み取り（INSERT を `virtual_entities()` で展開）と viewer（同じ展開で文字をモデル空間へ移す）で同じ値になるので、
+    文字幅の見積もりに頼らずに同じ文字を指せる。TEXT/ATTRIB は位置合わせがあれば `align_point`、無ければ `insert`。"""
+    if e.dxftype() in ('TEXT', 'ATTRIB'):
+        ha, va = e.dxf.get('halign', 0), e.dxf.get('valign', 0)
+        pt = e.dxf.align_point if (ha or va) and e.dxf.hasattr('align_point') else e.dxf.insert
+    else:
+        pt = e.dxf.insert
+    return (round(pt.x, 3), round(pt.y, 3))
 
 
 def norm(s):
@@ -171,7 +185,7 @@ def collect(msp, hidden=frozenset()):
             if t in ('TEXT', 'MTEXT', 'ATTRIB'):
                 s, x0, x1, y0, y1 = _text_box(e)
                 if s.strip():
-                    txts.append(Txt(s, x0, x1, y0, y1, src))
+                    txts.append(Txt(s, x0, x1, y0, y1, src, ref=text_anchor(e)))
             elif t == 'LINE':
                 a, b = e.dxf.start, e.dxf.end
                 lines.append(Seg(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y), src,

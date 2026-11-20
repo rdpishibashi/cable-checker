@@ -142,6 +142,8 @@ def build_tables(txts, cols):
                 v, dead = _cell_text(txts, c['x0'], c['x1'], y1, y0)
                 key = c['kind'] if c['kind'] not in r else c['kind'] + '_2'
                 r[key] = v
+                r.setdefault('_refs', {})[key] = [(norm(x.s), x.ref) for x in txts
+                                                  if c['x0'] < x.cx < c['x1'] and y0 < x.cy < y1 and not x.struck]
                 if dead:
                     r.setdefault('_deleted', {})[key] = dead
             t['rows'].append(r)
@@ -268,7 +270,7 @@ def trace(tables, segs, txts, arc_ends=()):
         if len(ps) < 2:
             continue
         segs_c = [w for wi, w in enumerate(wires) if find(wi) == comp]
-        labels, dead = [], []
+        labels, dead, label_refs = [], [], []
         for x in txts:
             if x in table_txt:
                 continue
@@ -277,8 +279,10 @@ def trace(tables, segs, txts, arc_ends=()):
             for w in segs_c:
                 if _is_h(w) and w.x0 - 0.5 <= x.cx <= w.x1 + 0.5 and -0.2 <= x.y0 - w.y0 <= 2.5:
                     (dead if x.struck else labels).append(norm(x.s))
+                    if not x.struck:
+                        label_refs.append((norm(x.s), x.ref))
                     break
-        conns.append({'ends': ps, 'labels': list(dict.fromkeys(labels)), 'deleted': dead, 'nseg': len(segs_c)})
+        conns.append({'ends': ps, 'labels': list(dict.fromkeys(labels)), 'deleted': dead, 'nseg': len(segs_c), 'label_refs': label_refs})
     return conns, ports
 
 
@@ -328,7 +332,8 @@ def parse(geo):
     # 表が無ければ接続の端（ports）が無く、conns は必ず空になる。電線の連結（重い）を省く（展開接続図 405 を 393 として読む1段目が主な対象）
     conns = trace(tables, segs, txts, geo.arc_ends)[0] if tables else []
     return {'tables': tables, 'conns': conns, 'notes': parse_notes(txts),
-            'texts': [norm(t.s) for t in txts if not t.struck]}
+            'texts': [norm(t.s) for t in txts if not t.struck],
+            'text_refs': [(norm(t.s), t.ref) for t in txts if not t.struck]}
 
 
 def _side_of(t, tables):
@@ -348,6 +353,9 @@ def connection_rows(res):
             vals.append({'表': t['name'] or f'表{ti + 1}', '位置': _side_of(t, tables), '行': r['i'],
                          '線番': r.get('線番', ''), 'PIN No.': r.get('PIN', '')})
         rec = {'端の数': len(vals)}
+        rec['_label_refs'] = c.get('label_refs', [])
+        for k, (ti, r, _s, _c) in enumerate(c['ends'][:2], 1):
+            rec[f'_端{k}_refs'] = r.get('_refs', {})
         for k, v in enumerate(vals[:2], 1):
             for kk, vv in v.items():
                 rec[f'端{k}_{kk}'] = vv

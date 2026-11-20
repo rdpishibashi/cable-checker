@@ -100,7 +100,7 @@ _DRAIN = {'SG', 'SH'}
 def _empty_drawing(name, no_text=False, drawing_set=SET_393):
     return {'drawing_number': name, 'set': drawing_set, 'no_text': no_text, 'kinds': [], 'list_rows': [], 'wire_rows': [],
             'wire_notes': [], 'fab_wire_numbers': set(), 'fab_notes': [], 'fab_texts': [], 'fab_text': '',
-            'fab_conns': [], 'schematic': None}
+            'fab_conns': [], 'fab_text_refs': [], 'schematic': None}
 
 
 def analyze_drawing(path, name):
@@ -125,7 +125,7 @@ def analyze_drawing(path, name):
     wire_rows = []
     for ti, table in enumerate(wire['tables'], 1):
         for r in table['rows']:
-            row = {'表': ti, '行': r['_row'], '_lines': r['_lines'],
+            row = {'表': ti, '行': r['_row'], '_lines': r['_lines'], '_refs': r.get('_refs', {}),
                    '削除された値': '; '.join(f'{k}:{v}' for k, v in r['_deleted'].items())}
             row.update({k: v for k, v in r.items() if not k.startswith('_')})
             wire_rows.append(row)
@@ -155,6 +155,7 @@ def analyze_drawing(path, name):
         'fab_notes': [p for p, _ in fab['notes']],
         'fab_texts': fab['texts'],
         'fab_text': _squash(' '.join(fab['texts'])),
+        'fab_text_refs': fab['text_refs'],
         'fab_conns': fab_drawing.connection_rows(fab),
         'schematic': None,          # 2段目（analyze_uploads）が展開接続図として読んだときだけ入る
     }

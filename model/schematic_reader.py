@@ -22,7 +22,7 @@ import ezdxf
 import ezdxf.path
 
 from .cable_extractor import CABLE_BODY, extract_cables
-from .drawing_geometry import norm
+from .drawing_geometry import norm, text_anchor
 from .region_detector import DEFAULT_REGION_CONFIG, _point_in_polygon, analyze_dxf_regions
 
 WNO = re.compile(r'(?<![0-9A-Z])W\s*NO\.?\s*(' + CABLE_BODY + r')(?![0-9A-Z])', re.I)
@@ -42,6 +42,7 @@ class T:
     h: float
     src: str
     color: int = 0
+    ref: tuple = None   # 文字の基準点（drawing_geometry.text_anchor）
 
     @property
     def cx(self):
@@ -170,7 +171,7 @@ def collect(doc):
                 s, ref, local, rot, h = _text_box(e)
                 if s.strip():
                     x0, y0, x1, y1 = _rot_box(ref, local, rot)
-                    g.txts.append(T(norm(s), x0, y0, x1, y1, rot % 360, h, src, color(e)))
+                    g.txts.append(T(norm(s), x0, y0, x1, y1, rot % 360, h, src, color(e), text_anchor(e)))
             elif t == 'LINE':
                 a, b = e.dxf.start, e.dxf.end
                 if math.dist((a.x, a.y), (b.x, b.y)) > EPS:
@@ -684,13 +685,14 @@ def terminal_at(g, rects, E, wire_dir):
     horiz = abs(wire_dir[0]) > abs(wire_dir[1])
     inside = text_in(g, r)
     # ピン番号: 枠の中で、芯線の延長線上（横の芯線なら同じ高さ）に最も近い文字
-    pin = None
+    pin, pin_t = None, None
     if inside:
         key = (lambda t: abs(t.cy - E[1])) if horiz else (lambda t: abs(t.cx - E[0]))
         cand = min(inside, key=key)
         row = (cand.y1 - cand.y0) if horiz else (cand.x1 - cand.x0)
         if key(cand) <= max(1.5, 0.6 * row):
             pin = cand.s
+            pin_t = cand
     # コネクタ名: 枠の外で、枠のすぐ上（縦の芯線なら左）にある文字
     name = None
     cands = []
@@ -703,11 +705,11 @@ def terminal_at(g, rects, E, wire_dir):
         else:          # 枠の左（90°の文字）または上
             if t.x1 <= x0 + 0.5 and x0 - t.x1 < 4 and t.y0 < y1 + 2 and t.y1 > y0 - 6:
                 cands.append((x0 - t.x1, t))
-    name_pt = None
+    name_pt, name_t = None, None
     if cands:
         nt = min(cands, key=lambda c: c[0])[1]
-        name, name_pt = nt.s, (nt.cx, nt.cy)
-    return {'rect': r, 'pin': pin, 'connector': name, 'kind': 'box', 'name_pt': name_pt}
+        name, name_pt, name_t = nt.s, (nt.cx, nt.cy), nt
+    return {'rect': r, 'pin': pin, 'connector': name, 'kind': 'box', 'name_pt': name_pt, 'pin_t': pin_t, 'name_t': name_t}
 
 
 def circle_terminal(g, E):
@@ -727,7 +729,8 @@ def circle_terminal(g, E):
         return None
     cx, cy = circ.center
     near = [t for t in g.txts if len(t.s) <= 3 and math.dist((t.cx, t.cy), (cx, cy)) < 4]
-    pin = min(near, key=lambda t: math.dist((t.cx, t.cy), (cx, cy))).s if near else None
+    pin_t = min(near, key=lambda t: math.dist((t.cx, t.cy), (cx, cy))) if near else None
+    pin = pin_t.s if pin_t else None
     col = [c for c in g.curves if c.kind == 'CIRCLE' and abs(c.center[0] - cx) < 0.15 and c.size[0] <= 3.2]
     col.sort(key=lambda c: c.center[1])
     top = circ
@@ -739,11 +742,11 @@ def circle_terminal(g, E):
              and 0 <= t.y0 - ty <= 6 and t.x0 - 3 <= tx <= t.x1 + 3]
     nt = min(cands, key=lambda t: t.y0 - ty) if cands else None
     return {'rect': None, 'pin': pin, 'connector': nt.s if nt else None, 'kind': 'circle', 'center': (cx, cy),
-            'name_pt': (nt.cx, nt.cy) if nt else None}
+            'name_pt': (nt.cx, nt.cy) if nt else None, 'pin_t': pin_t, 'name_t': nt}
 
 
-def wire_labels(g, k, sym_box=None):
-    """芯線 k の上（横の線）・左（縦の線）にある文字（線番・色）。記号の近くを優先して、近い順。"""
+def wire_label_texts(g, k, sym_box=None):
+    """芯線 k の上（横の線）・左（縦の線）にある文字（線番・色）。記号の近くを優先して、近い順。文字 T のリスト。"""
     s = g.segs[k]
     horiz = abs(s.a[1] - s.b[1]) < 0.05
     out = []
@@ -751,12 +754,17 @@ def wire_labels(g, k, sym_box=None):
         if horiz:
             lo, hi = sorted((s.a[0], s.b[0]))
             if lo - 0.5 <= t.cx <= hi + 0.5 and 0 <= t.y0 - s.a[1] <= 1.5 and not t.vertical:
-                out.append((abs(t.cx - (sym_box[0] + sym_box[2]) / 2) if sym_box else 0, t.s))
+                out.append((abs(t.cx - (sym_box[0] + sym_box[2]) / 2) if sym_box else 0, t.s, t))
         else:
             lo, hi = sorted((s.a[1], s.b[1]))
             if lo - 0.5 <= t.cy <= hi + 0.5 and 0 <= s.a[0] - t.x1 <= 1.5 and t.vertical:
-                out.append((abs(t.cy - (sym_box[1] + sym_box[3]) / 2) if sym_box else 0, t.s))
-    return [v for _, v in sorted(out)]
+                out.append((abs(t.cy - (sym_box[1] + sym_box[3]) / 2) if sym_box else 0, t.s, t))
+    return [t for _d, _s, t in sorted(out, key=lambda v: (v[0], v[1]))]
+
+
+def wire_labels(g, k, sym_box=None):
+    """`wire_label_texts` の文字列版。"""
+    return [t.s for t in wire_label_texts(g, k, sym_box)]
 
 
 def nearby_symbols(g, lab, max_d=12.0):
@@ -826,7 +834,7 @@ def gnd_terminal(g, E, r=7.0):
     if not cands:
         return None
     t = min(cands, key=lambda t: math.dist((t.cx, t.cy), E))
-    return {'rect': None, 'pin': None, 'connector': t.s.strip(), 'kind': 'gnd', 'name_pt': (t.cx, t.cy)}
+    return {'rect': None, 'pin': None, 'connector': t.s.strip(), 'kind': 'gnd', 'name_pt': (t.cx, t.cy), 'pin_t': None, 'name_t': t}
 
 
 # ---------------------------------------------------------------- 機器（コネクタの先の箱）
@@ -836,7 +844,7 @@ def device_names(g, grid, rects, term, E, max_box=150.0):
 
     センサー・ヒーター・モーターなど、機器そのものがユニットのものは領域抽出の対象（黄色の太線の枠）に
     ならないため、配線をたどって機器の箱を見つける（2026-11-19 ユーザー決定 (a)）。
-    Returns: [(文字, 経路の端点)]（重複なし）
+    Returns: [(文字の1行目, 経路の端点, 文字 T)]（重複なし）
     """
     r = term.get('rect') if term else None
     if not r:
@@ -903,7 +911,7 @@ def device_names(g, grid, rects, term, E, max_box=150.0):
                 first = t.s.split('\n')[0]
                 if first not in seen:
                     seen.add(first)
-                    out.append((first, stop))
+                    out.append((first, stop, t))
     return out
 
 
@@ -939,7 +947,7 @@ def _term_points(term, inner):
 
 
 def _empty_end():
-    return {'kind': None, 'name': None, 'pin': None, 'regions': [], 'devices': [], 'nearby': []}
+    return {'kind': None, 'name': None, 'pin': None, 'regions': [], 'devices': [], 'nearby': [], '_refs': {}}
 
 
 def _end_info(g, grid, device_rects, regions, E, term, inner):
@@ -952,19 +960,35 @@ def _end_info(g, grid, device_rects, regions, E, term, inner):
             for _d, cand in r['name_candidates']:     # 最有力候補でなくても、候補のどれかが合えばよい
                 if cand not in names:
                     names.append(cand)
-    devices = []
-    for txt, _stop in device_names(g, grid, device_rects, term, E):
+    devices, device_refs = [], {}
+    for txt, _stop, dt in device_names(g, grid, device_rects, term, E):
         if txt not in devices:
             devices.append(txt)
-    nearby = []
+            device_refs[txt] = dt.ref
+    nearby, nearby_refs = [], {}
     if term.get('name_pt'):
         for t in g.txts:
             d = math.dist((t.cx, t.cy), term['name_pt'])
             if d <= NEAR_LABEL_DIST:
-                nearby.append((t.s.split('\n')[0], round(d, 1), t.s))
+                nearby.append((t.s.split('\n')[0], round(d, 1), t.s, t.ref))
         nearby.sort(key=lambda x: x[1])
+        for first, _d, _full, ref in nearby:
+            nearby_refs.setdefault(first, ref)
+        nearby = [(first, d, full) for first, d, full, _ref in nearby]
+    # 領域の名称候補は文字列しか持たないので、端の位置に最も近い同じ文字を探す（見つからなければ位置なし）
+    at = term.get('name_pt') or (inner if inner else None)
+    region_refs = {}
+    for cand in names:
+        same = [t for t in g.txts if cand in (t.s, t.s.split('\n')[0].strip(), t.s.strip())]
+        if same and at:
+            region_refs[cand] = min(same, key=lambda t: math.dist((t.cx, t.cy), at)).ref
+        elif same:
+            region_refs[cand] = same[0].ref
+    refs = {'name': term['name_t'].ref if term.get('name_t') else None,
+            'pin': term['pin_t'].ref if term.get('pin_t') else None,
+            'regions': region_refs, 'devices': device_refs, 'nearby': nearby_refs}
     return {'kind': term['kind'], 'name': term['connector'], 'pin': term['pin'],
-            'regions': names, 'devices': devices, 'nearby': nearby}
+            'regions': names, 'devices': devices, 'nearby': nearby, '_refs': refs}
 
 
 # 図中の参照: 「to POWER LINE (SYSTEM I/F BOX) (-405-08)」のように、括弧の中の `-英数字3-英数字2` が参照先の図番（の一部）を示す。
@@ -1056,6 +1080,8 @@ def analyze_schematic(path, name):
                     side = '-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+'
                     term = terminal_at(g, rects, E, g.segs[path_[-1]].dir())   # 曲がった芯線は端の線分の向き
                     ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E))
-                wires.append({'labels': wire_labels(g, k, box), 'ends': ends})
-        out['occurrences'].append({'cable': lab['cable'], 'remark': lab['remark'], 'how': how, 'wires': wires})
+                wl = wire_label_texts(g, k, box)
+                wires.append({'labels': [t.s for t in wl], 'ends': ends, '_label_refs': [t.ref for t in wl]})
+        out['occurrences'].append({'cable': lab['cable'], 'remark': lab['remark'], 'how': how, 'wires': wires,
+                                   '_label_ref': lab['txt'].ref})
     return out

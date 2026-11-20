@@ -112,6 +112,7 @@ def parse_tables(txts, segs):
                 dead = [t for t in cell if t.struck]
                 for k in range(i, j + 1):
                     recs[k][name] = _value(name, live)
+                    recs[k].setdefault('_refs', {})[name] = [(t.s, t.ref) for t in live]   # 文字の位置（viewer の強調に使う）
                     if name.startswith('接続先'):   # 一覧表との照合でユニット名／端子台に分けるため行を残す
                         recs[k].setdefault('_lines', {})[name] = [
                             norm(l) for t in live for l in t.s.split('\n') if norm(l)]

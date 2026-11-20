@@ -17,8 +17,8 @@ from . import cable_list_table, legend
 from .compare_output import (ALL_SHEET, compare_frame, count_rows, group_sheet_names, status_formats,
                              write_compare_sheet)
 from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, NG, OK, SEP, SET_393,
-                          SET_405, SYMBOLS, UNREAD, WEAK, _codes, _values, fab_text_rows, pattern_resolutions)
-from .consistency import _Ctx, _chain, _schematic_names
+                          SET_405, SYMBOLS, UNREAD, WEAK, drawing_relations, fab_text_rows, pattern_resolutions)
+from .cell_values import codes as _codes, values as _values
 from .excel_output import display_width
 from .symbols import EXCEL_COLORS, VIEWER_COLORS
 from .wire_number_table import split_unit_terminal
@@ -124,27 +124,9 @@ def legend_frame(result=None):
 
 
 def relation_frame(result):
-    """図面の関係。アップロードした展開接続図（405。図番順）ごとに、関連する ケーブル一覧表・線番設定表・ケーブル製作図 の図番を `、` 区切りで並べる。
-
-    関連は照合と同じチェーン: 一覧表の行の接続図パターンが当たった展開接続図 → その行の製作図パターンが当たった製作図 →
-    製作図の注記の線番設定表パターンが当たった線番設定表。関連が無ければ空欄。"""
-    ctx = _Ctx(result['drawings'])
-    related = {}
-    for d in result['drawings']:
-        for row in d['list_rows']:
-            names = _schematic_names(ctx, _values(row.get('接続図パターン')))
-            if not names:
-                continue
-            ch = _chain(row, ctx.by_name_393)
-            for name in names:
-                rel = related.setdefault(name, [set(), set(), set()])
-                rel[0].add(d['drawing_number'])
-                rel[1].update(w['drawing_number'] for w in ch['wires'] if ch['wire_ok'])
-                rel[2].update(f['drawing_number'] for f in ch['fabs'] if ch['fab_ok'])
-    rows = []
-    for name in sorted(d['drawing_number'] for d in result['drawings'] if d['set'] == SET_405):
-        lists, wires, fabs = (sorted(x) for x in related.get(name, [set(), set(), set()]))
-        rows.append([name, '、'.join(lists), '、'.join(wires), '、'.join(fabs)])
+    """図面の関係。アップロードした展開接続図（405。図番順）ごとに、関連する ケーブル一覧表・線番設定表・ケーブル製作図 の図番を `、` 区切りで並べる
+    （関連の求め方は `consistency.drawing_relations()`）。関連が無ければ空欄。"""
+    rows = [[name, *('、'.join(x) for x in rel)] for name, *rel in drawing_relations(result['drawings'])]
     return pd.DataFrame(rows, columns=RELATION_COLUMNS)
 
 

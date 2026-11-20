@@ -1348,6 +1348,29 @@ def pattern_resolutions(drawings):
     return out
 
 
+def drawing_relations(drawings):
+    """展開接続図（405。図番順）ごとの、関連する一覧表・線番設定表・製作図の図番。
+
+    Returns: [(展開接続図の図番, [一覧表の図番], [線番設定表の図番], [製作図の図番])]（各リストは昇順。関連が無ければ空）。
+    関連は照合と同じチェーン: 一覧表の行の接続図パターンが当たった展開接続図 → その行の製作図パターンが当たった製作図 →
+    製作図の注記の線番設定表パターンが当たった線番設定表。"""
+    ctx = _Ctx(drawings)
+    related = {}
+    for d in drawings:
+        for row in d['list_rows']:
+            names = _schematic_names(ctx, _values(row.get('接続図パターン')))
+            if not names:
+                continue
+            ch = _chain(row, ctx.by_name_393)
+            for name in names:
+                rel = related.setdefault(name, [set(), set(), set()])
+                rel[0].add(d['drawing_number'])
+                rel[1].update(w['drawing_number'] for w in ch['wires'] if ch['wire_ok'])
+                rel[2].update(f['drawing_number'] for f in ch['fabs'] if ch['fab_ok'])
+    return [(name, *(sorted(x) for x in related.get(name, [set(), set(), set()])))
+            for name in sorted(d['drawing_number'] for d in drawings if d['set'] == SET_405)]
+
+
 def fab_text_rows(drawings):
     """照合 2 が探す対象の製作図の文字。製作図のパターンに当たった図面と、線番/PIN の表がある図面。"""
     hit = {name for r in pattern_resolutions(drawings) if r['図面種別'] == '製作図'

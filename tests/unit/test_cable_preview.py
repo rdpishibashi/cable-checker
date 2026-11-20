@@ -83,3 +83,19 @@ def test_build_viewer_data_is_json_serializable():
     data = cable_preview.build_viewer_data(cable_preview.render_base_svg(make_dxf(['W No.M39001'])), 'EE1234-405-01A.dxf')
     assert data['count'] == 1 and data['color'] == cable_preview.CABLE_COLOR
     json.dumps(data)
+
+
+def test_to_svg_maps_dxf_coordinates_onto_the_drawn_lines():
+    """守るもの: DXF 座標→viewBox 座標の変換（to_svg）が、描かれた線のパスの始点と一致する（図形の重ね書きが線に載る）。"""
+    import re
+    doc = ezdxf.new('R2010')
+    msp = doc.modelspace()
+    msp.add_line((100, 50), (300, 50))
+    msp.add_line((100, 50), (100, 250))
+    msp.add_text('X', dxfattribs={'insert': (500, 400), 'height': 5})
+    base = cable_preview.render_base_svg(to_bytes(doc))
+    x, y = cable_preview.to_svg(base, 100, 50)
+    starts = [(float(a), float(b)) for a, b in re.findall(r'<path d="M ([\d.]+) ([\d.]+) l', base.inner_svg)]
+    assert any(abs(sx - x) < 0.05 * base.scale and abs(sy - y) < 0.05 * base.scale for sx, sy in starts)
+    x2, y2 = cable_preview.to_svg(base, 300, 50)
+    assert abs((x2 - x) - 200 * base.scale) < 1e-6 and abs(y2 - y) < 1e-6

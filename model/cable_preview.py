@@ -40,7 +40,7 @@ CJK_FONT_CANDIDATES = [
 BASE_COLOR = "#ffffff"      # 図面全体の色（背景は黒）
 CABLE_COLOR = "#ff3030"     # ケーブル番号を含む文字の色（赤）
 # `BaseRender` の項目を変えたら上げる（view の cache_data のキーに含める）
-BASE_RENDER_VERSION = 2
+BASE_RENDER_VERSION = 3
 
 _TEXT_TYPES = ("TEXT", "MTEXT")
 _MTEXT_COLOR_CODE = re.compile(r"\\[Cc][0-9]+;?")  # 本文中の色指定（\C1; \c255;）。目印の色に置き換える
@@ -58,6 +58,10 @@ class BaseRender:
     text_classes: List[Tuple[str, list]] = field(default_factory=list)
     # 文字1件ごと: {'text': 正規化した文字列, 'classes': [[クラス名, 'fill'|'stroke'], ...], 'anchor': 基準点（text_anchor）}
     texts: List[dict] = field(default_factory=list)
+    # DXF 座標 → viewBox 座標: svg_x = (x - ext_min_x)*scale, svg_y = (ext_max_y - y)*scale（`to_svg`）
+    ext_min_x: float = 0.0
+    ext_max_y: float = 0.0
+    scale: float = 1.0
 
 
 def _register_bundled_font() -> None:
@@ -227,6 +231,8 @@ def render_base_svg(dxf_bytes: bytes) -> BaseRender:
     if not backend.player().bbox().has_data:
         return BaseRender(cjk_font=cjk_font, empty=True)
 
+    ext = backend.player().bbox()      # get_xml_root_element の後は SVG 座標になるので、先に DXF 座標の範囲を控える
+    width = ext.extmax.x - ext.extmin.x
     root = backend.get_xml_root_element(layout.Page(0, 0, layout.Units.mm))
     texts: List[dict] = []
     text_classes = _rewrite_marker_styles(root, marker_to_text, marker_to_anchor, texts)
@@ -238,7 +244,13 @@ def render_base_svg(dxf_bytes: bytes) -> BaseRender:
     return BaseRender(
         inner_svg="".join(parts), view_box=(vb[2], vb[3]),
         cjk_font=cjk_font, text_classes=text_classes, texts=texts,
+        ext_min_x=ext.extmin.x, ext_max_y=ext.extmax.y, scale=(vb[2] / width if width else 1.0),
     )
+
+
+def to_svg(base: BaseRender, x: float, y: float) -> Tuple[float, float]:
+    """DXF 座標を viewBox 座標にする（viewer の重ね書き用）。"""
+    return ((x - base.ext_min_x) * base.scale, (base.ext_max_y - y) * base.scale)
 
 
 def cable_classes(base: BaseRender) -> Tuple[list, int]:

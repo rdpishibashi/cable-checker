@@ -1087,6 +1087,37 @@ def find_references(texts):
     return out
 
 
+def _rect_made_by(r, segs, tol=0.05):
+    """矩形 r の辺のどれかに、segs（芯線自身の線分）のどれかが全部載っているか。載っていれば、この矩形は芯線が作ったもの
+    （U 字の線とコネクタの辺で閉じた長方形）で、コネクタの枠ではない。"""
+    x0, y0, x1, y1 = r
+    for s in segs:
+        (ax, ay), (bx, by) = s.a, s.b
+        if abs(ay - by) < tol and (abs(ay - y0) < tol or abs(ay - y1) < tol) and x0 - tol <= min(ax, bx) and max(ax, bx) <= x1 + tol:
+            return True
+        if abs(ax - bx) < tol and (abs(ax - x0) < tol or abs(ax - x1) < tol) and y0 - tol <= min(ay, by) and max(ay, by) <= y1 + tol:
+            return True
+    return False
+
+
+def _loop_ends(g, grid, device_rects, regions, rects, narrow, traces, path_all, side):
+    """両端が記号の同じ側に着く芯線（U 字のジャンパ線。EE6886-614-01A の M65027: 1つのコネクタの端子 5 と 6 をつなぐ）の両端。
+
+    芯線自身が作る長方形（U 字の線＋コネクタの辺）はコネクタの枠にしない。両端のコネクタが見つかったときだけ、2つ目の端を反対側のキーに入れて
+    返す（同じキーだと後の端が前の端を上書きし、ピンが片方しか残らない）。どちらかの端が見つからなければ None（従来の読み方に戻す）。"""
+    own = [g.segs[j] for j in path_all]
+    wire_rects = [r for r in rects if not _rect_made_by(r, own)]
+    infos = []
+    for E, _reason, path_ in traces:
+        wire_dir = g.segs[path_[-1]].dir()
+        term = terminal_at(g, wire_rects, E, wire_dir, narrow)
+        if not term or term.get('kind') != 'box':
+            return None
+        infos.append(_end_info(g, grid, device_rects, regions, E, term, inner_point(term, E, wire_dir)))
+    other = '+' if side == '-' else '-'
+    return {side: infos[0], other: infos[1]}
+
+
 def analyze_schematic(path, name):
     """1枚の展開接続図を読み、ケーブル番号の出現ごとの芯線と両端の事実を返す。
 
@@ -1146,14 +1177,22 @@ def analyze_schematic(path, name):
                 seen.add(k)
                 d = g.segs[k].dir()
                 horiz = abs(d[0]) >= abs(d[1])
-                ends, path_all = {}, []
-                for E, _reason, path_ in trace_wire(g, grid, k):
+                traces = trace_wire(g, grid, k)
+                path_all = []
+                for _E, _reason, path_ in traces:
                     path_all += [j for j in path_ if j not in path_all]
-                    side = '-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+'
-                    if box:
-                        E = clip_at_terminal_circle(g, E, side, horiz, box)
-                    term = terminal_at(g, rects, E, g.segs[path_[-1]].dir(), narrow)   # 曲がった芯線は端の線分の向き
-                    ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E, g.segs[path_[-1]].dir()))
+                seen.update(path_all)           # 同じ芯線（U 字の線など）を、別の線分から二度たどらない
+                sides = ['-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+' for E, _r, _p in traces]
+                ends = None
+                if len(traces) == 2 and sides[0] == sides[1]:
+                    ends = _loop_ends(g, grid, device_rects, regions, rects, narrow, traces=traces, path_all=path_all, side=sides[0])
+                if ends is None:
+                    ends = {}
+                    for (E, _reason, path_), side in zip(traces, sides):
+                        if box:
+                            E = clip_at_terminal_circle(g, E, side, horiz, box)
+                        term = terminal_at(g, rects, E, g.segs[path_[-1]].dir(), narrow)   # 曲がった芯線は端の線分の向き
+                        ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E, g.segs[path_[-1]].dir()))
                 wl = wire_label_texts(g, k, box)
                 wires.append({'labels': [t.s for t in wl], 'ends': ends, '_label_refs': [t.ref for t in wl],
                               '_path': _segs_of(g, path_all)})

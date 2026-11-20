@@ -301,6 +301,12 @@ def parse_notes(txts):
     return out
 
 
+def is_note_block(text):
+    """注記の文章ブロック（先頭行に「注記」がある。例: `(注記)\n1. 長さ(*)、コネクタ名称…`）。製作図の記載（部品種別・ケーブル種類・機器符号）の
+    照合と強調の対象にしない（注記の文中の `Module` が種類 `UL` に部分一致するなど、記載ではない文字を拾うため）。"""
+    return '注記' in text.split('\n')[0]
+
+
 def mark_struck(txts, segs):
     """文字の中ほどを横切る短い横線がある文字を削除済みにする（表の罫線は文字の中を通らない）。"""
     hs = [s for s in segs if _is_h(s) and s.x1 - s.x0 < 80]
@@ -319,7 +325,8 @@ def parse(geo):
 
     Returns:
         {'tables': 線番/PIN の表, 'conns': 表の行どうしの接続, 'notes': [(線番設定表パターン, 注記の行)],
-         'texts': 図面の全文字（削除済みを除き正規化した文字列。一覧表の記載の照合 #2 が使う）}
+         'texts': 図面の全文字（削除済みを除き正規化した文字列。図中の参照の探索が使う）,
+         'text_refs': 記載の文字と基準点（削除済み・注記ブロックを除く。部品種別・ケーブル種類・機器符号の照合と強調が使う）}
         線番/PIN の表が無い図面は tables が空。
     """
     txts = geo.copy_txts()
@@ -334,7 +341,7 @@ def parse(geo):
     conns = trace(tables, segs, txts, geo.arc_ends)[0] if tables else []
     return {'tables': tables, 'conns': conns, 'notes': parse_notes(txts),
             'texts': [norm(t.s) for t in txts if not t.struck],
-            'text_refs': [(norm(t.s), t.ref) for t in txts if not t.struck]}
+            'text_refs': [(norm(t.s), t.ref) for t in txts if not t.struck and not is_note_block(norm(t.s))]}
 
 
 def _side_of(t, tables):

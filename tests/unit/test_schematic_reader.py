@@ -275,6 +275,42 @@ def test_small_junction_dots_on_a_through_line_do_not_stop_the_wire(tmp_path):
     assert _ends_of(read(build_circles(tmp_path, through=True, dots_only=True))) == {'-': (None, None), '+': (None, None)}
 
 
+# ---------------------------------------------------------------- 1つのコネクタの端子どうしをつなぐ U 字の線（ジャンパ）
+
+def build_jumpers(tmp_path, name='EE0000-405-01A'):
+    """1つの細長いコネクタ CN**（幅 9 × 高さ 61。端子 5・6・8・9 の文字が枠の中）の端子 5-6 と 8-9 を、U 字の線（横→縦→横）でつなぐ図面。
+    長円のケーブル記号が、2つの U 字の横線をまとめて横切る（EE6886-614-01A の M65027 と同じ形）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _box(msp, 0, -61, 9, 0)
+    for pin, y in (('5', -5), ('6', -10), ('8', -20), ('9', -25)):
+        _text(msp, pin, 4.5, y)
+    _text(msp, 'CN**', 4.5, 2.5)
+    for ya, yb in ((-5, -10), (-20, -25)):
+        _line(msp, (9, ya), (26, ya))
+        _line(msp, (26, ya), (26, yb))
+        _line(msp, (26, yb), (9, yb))
+    msp.add_arc((22, -2), 1.5, 0, 180, dxfattribs={'color': 2})
+    msp.add_arc((22, -28), 1.5, 180, 360, dxfattribs={'color': 2})
+    _line(msp, (20.5, -28), (20.5, -2), 2)
+    _line(msp, (23.5, -28), (23.5, -2), 2)
+    _arrow(msp, (22, -0.5), 8)
+    _text(msp, f'W No.{CABLE}', 14, 8, ap=7)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def test_u_shaped_jumper_wires_read_both_pins_of_the_same_connector_once_each(tmp_path):
+    """守るもの: 両端が同じコネクタに着く U 字の線は、1本ずつ数え（同じ線を U 字の2つの横線から二度たどらない）、両端のピン（5/6・8/9）と
+    コネクタ名が読める（以前は4本に数えて、U 字の線とコネクタの辺で閉じた小さな長方形を枠と取り違え、名前を隣のピン番号 `7`・`4` にし、
+    2つ目の端が1つ目を上書きした。EE6886-614-01A の M65027）。"""
+    occ = occurrence(read(build_jumpers(tmp_path)))
+    pins = sorted(tuple(sorted(w['ends'][s]['pin'] for s in '-+')) for w in occ['wires'])
+    assert pins == [('5', '6'), ('8', '9')]
+    assert all(w['ends'][s]['name'] == 'CN**' and w['ends'][s]['kind'] == 'box' for w in occ['wires'] for s in '-+')
+
+
 # ---------------------------------------------------------------- ユニットの根拠
 
 def test_region_name_candidates_of_every_candidate_are_collected_for_the_end(tmp_path, monkeypatch):

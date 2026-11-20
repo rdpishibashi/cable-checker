@@ -151,7 +151,7 @@ def analyze_drawing(path, name):
         'fab_wire_numbers': fab_wire_numbers,
         'fab_notes': [p for p, _ in fab['notes']],
         'fab_texts': fab['texts'],
-        'fab_text': _squash(' '.join(fab['texts'])),
+        'fab_text': _squash(' '.join(t for t, _ in fab['text_refs'])),
         'fab_text_refs': fab['text_refs'],
         'fab_conns': fab_drawing.connection_rows(fab),
         'schematic': None,          # 2段目（analyze_uploads）が展開接続図として読んだときだけ入る

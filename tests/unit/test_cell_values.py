@@ -12,6 +12,15 @@ def test_values_and_codes_split_multi_values():
     assert cv.codes('TBR1B, TBR2B | CN1') == ['TBR1B', 'TBR2B', 'CN1'] and cv.codes('') == []
 
 
+def test_code_matches_name_wildcard_on_either_side():
+    """守るもの: 機器符号の `*` は任意の1文字で、一覧表の側（`TBR1*`）にも図面の側（`CNSHP**`。モジュールの伏せ字。一覧表は `CNSHPR1`）にもあってよい。
+    長さが違えば一致しない。括弧の前・1行目で比べ、`GND` を含む符号は `GND` を含む文字と一致（以前は一覧表の側の `*` だけで、`CNSHP**` が `CNSHPR1` と ×）。"""
+    assert cv.code_matches_name('CNSHPR1', 'CNSHP**') and cv.code_matches_name('TBR1*', 'TBR1B')
+    assert cv.code_matches_name('CNSHPR1', 'CNSHPR1(NOTE)') and cv.code_matches_name('CNSHPR1', 'CNSHP**\nSHIELD')
+    assert not cv.code_matches_name('CNSHPR1', 'CNSHP*') and not cv.code_matches_name('CNSHPR1', 'CNSHQ**')
+    assert cv.code_matches_name('GND BAR', 'GND') and not cv.code_matches_name('GND BAR', 'PE')
+
+
 def test_squash_normalises_width_space_and_case():
     """守るもの: squash は空白除去・大文字、nfkc_squash は全角を半角にそろえてから同じ。"""
     assert cv.squash(' ab c\n') == 'ABC' and cv.nfkc_squash('ＡＢ ｃ') == 'ABC'

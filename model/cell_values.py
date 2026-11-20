@@ -25,14 +25,17 @@ def nfkc_squash(s):
 
 
 def code_matches_name(code, name):
-    """一覧表の機器符号 code（`*` は任意の1文字）が、図面の文字 name（1行目・括弧の前）と一致するか。`GND` を含む符号は `GND` を含む文字と一致。
+    """一覧表の機器符号 code が、図面の文字 name（1行目・括弧の前）と一致するか。`*` は任意の1文字で、**どちらの側にあってもよい**
+    （一覧表の `TBR1*`、図面の `CNSHP**`〈モジュールの伏せ字。一覧表は `CNSHPR1`〉）。`GND` を含む符号は `GND` を含む文字と一致。
     展開接続図の端の名前・製作図の文字の両方の照合と、viewer の強調が使う（規則を1か所に置く）。"""
     c = squash(code)
     if 'GND' in c:
         return 'GND' in squash(name)
-    rx = re.compile('^' + ''.join('.' if ch == '*' else re.escape(ch) for ch in c) + '$')
+
+    def same(a, b):
+        return len(a) == len(b) and all(x == y or x == '*' or y == '*' for x, y in zip(a, b))
     first = squash(name.split('\n')[0])
-    return bool(rx.match(first) or rx.match(first.split('(')[0]))
+    return same(c, first) or same(c, first.split('(')[0])
 
 
 def values(cell):

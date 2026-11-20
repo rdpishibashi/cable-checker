@@ -42,6 +42,9 @@ import pytest
 
 from model.consistency import ITEM_COLUMNS, SYMBOLS, analyze_drawing, pattern_resolutions, run_check
 from model.consistency_output import build_workbook, preview_sheets
+from model.legend import legend_rows
+
+LEGEND_ROWS = len(legend_rows())   # 記号の説明は結果に依らない固定の表（行数は内容に追従）
 
 pytestmark = pytest.mark.slow
 
@@ -282,10 +285,10 @@ def test_excel_matches_preview_and_has_all_rows(result):
     # シートの並びと行数。All Diff＝ケーブル 217（両方108・展開接続図だけ2・製作図だけ107）、グループは 393 のサブタイトル優先の2つ
     # （405 全体と突き合わせるので、グループの行＝そのグループのケーブル＋405 にだけあるケーブル）、図面一覧＝129図面、ケーブル抽出＝405 の110＋393 の267
     assert {k: len(v) for k, v in sheets.items()} == {
-        'Summary': 31, '図面一覧': 129, 'ケーブル抽出': 377, 'All Diff': 217, 'ケーブル一覧表 Diff': 124, '線番設定表 Diff': 205,
+        'Summary': 31, '記号の説明': LEGEND_ROWS, '図面一覧': 129, 'ケーブル抽出': 377, 'All Diff': 217, 'ケーブル一覧表 Diff': 124, '線番設定表 Diff': 205,
         '整合性チェック': 228, '照合明細': 4144, '芯線照合': 1101, '展開接続図': 628, 'ケーブル一覧表': 134, '線番設定表': 403,
         '製作図の接続表': 456, '製作図の文字': 3852, '図番パターン照合': 174}
-    assert list(sheets) == ['Summary', '図面一覧', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
+    assert list(sheets) == ['Summary', '記号の説明', '図面一覧', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
                             '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']
     index = sheets['図面一覧']
     assert index.groupby('セット').size().to_dict() == {'展開接続図（405）': 23, 'ケーブル製作図（393）': 106}

@@ -30,6 +30,7 @@ from .cable_extractor import find_cables
 from .common_utils import is_invisible
 from .drawing_geometry import text_anchor
 from .extract_labels import extract_text_from_entity
+from .symbols import BY_SEVERITY, LABELS, RELATED, VIEWER_COLORS, rank
 
 SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", SVG_NS)
@@ -269,18 +270,14 @@ def cable_classes(base: BaseRender) -> Tuple[list, int]:
 
 
 # 照合の記号ごとの文字の色（Excel のセル色と対応: ○緑・△黄・×赤・？青。－ と「関連（照合に使っていない）」は紫）
-RELATED = '関連'
-SYMBOL_TEXT_COLORS = {'○': '#33dd66', '△': '#ffd400', '×': '#ff3030', '？': '#4da6ff', '－': '#c080ff', RELATED: '#c080ff'}
-SYMBOL_LABELS = {'○': '○ 一致', '△': '△ 一致（根拠が弱い）', '×': '× 不整合', '？': '？ 読めない', '－': '－ 対象外', RELATED: '関連（照合に使っていない）'}
-_SYMBOL_ORDER = ['×', '？', '△', '○', '－', RELATED]       # 重い順（同じ文字に複数の記号が付いたら先のもの）
-_SYMBOL_RANK = {sym: i for i, sym in enumerate(_SYMBOL_ORDER)}
+SYMBOL_TEXT_COLORS = VIEWER_COLORS          # 記号 → 文字・図形の色（定義は symbols.py）
 
 
 def _squash(s: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize('NFKC', s or '')).upper()
 
 
-def apply_marks(base: BaseRender, marks, cable: Optional[str] = None) -> Tuple[list, dict, int]:
+def apply_marks(base: BaseRender, marks) -> Tuple[list, dict, int]:
     """マーク（[{'anchor': (x, y), 'text': 文字, 'symbol': 記号|'関連'}]）を、描画した文字のクラスに対応づける。
 
     突き合わせは基準点（`text_anchor`）。同じ基準点に文字が複数あるときだけ文字列（空白除去・大文字）で絞る。
@@ -305,7 +302,7 @@ def apply_marks(base: BaseRender, marks, cable: Optional[str] = None) -> Tuple[l
             continue
         for t in cands:
             cur = best.get(id(t))
-            if cur is None or _SYMBOL_RANK[m['symbol']] < _SYMBOL_RANK[cur]:
+            if cur is None or rank(m['symbol']) < rank(cur):
                 best[id(t)] = m['symbol']
     items, counts = [], {}
     for t in base.texts:
@@ -351,12 +348,12 @@ def shape_paths(base: BaseRender, shapes) -> List[dict]:
             else:
                 d = f"M {_f(x0)} {_f(y0)} L {_f(x1)} {_f(y0)} L {_f(x1)} {_f(y1)} L {_f(x0)} {_f(y1)} Z"
         by_symbol.setdefault(sh['symbol'], []).append(d)
-    order = [RELATED, '－', '○', '△', '？', '×']
+    order = BY_SEVERITY[::-1]                  # 軽い記号から先に描く（重い記号が上に重なる）
     return [{'d': ' '.join(by_symbol[sym]), 'color': SYMBOL_TEXT_COLORS[sym], 'symbol': sym, 'count': len(by_symbol[sym])}
             for sym in order if sym in by_symbol]
 
 
-def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cable=None, shapes=None) -> dict:
+def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, shapes=None) -> dict:
     """viewer 部品に渡す data（JSON 化できる dict）を作る。
 
     marks が None: ケーブル番号を含む文字を赤にする（選んだケーブルが無いとき）。
@@ -369,9 +366,9 @@ def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cabl
         legend = [['ケーブル番号', CABLE_COLOR, count]]
         counts, missing = {}, 0
     else:
-        items, counts, missing = apply_marks(base, marks, cable)
+        items, counts, missing = apply_marks(base, marks)
         count = sum(counts.values())
-        legend = [[SYMBOL_LABELS[sym], SYMBOL_TEXT_COLORS[sym], counts[sym]] for sym in _SYMBOL_ORDER if sym in counts]
+        legend = [[LABELS[sym], SYMBOL_TEXT_COLORS[sym], counts[sym]] for sym in BY_SEVERITY if sym in counts]
     return {
         "fname": fname, "title": title or fname, "viewBox": [base.view_box[0], base.view_box[1]],
         "svg": base.inner_svg, "sig": f"{fname}:{len(base.inner_svg)}:{hash(base.inner_svg) & 0xffffffff}",

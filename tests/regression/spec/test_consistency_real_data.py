@@ -324,11 +324,11 @@ def test_cable_focus_m65206_acceptance(result):
     assert ('ALS1', '△') in symbols['EE6892-365-61C'] and ('ALS1 R1', '△') in symbols['EE3298-634-07E']
     assert ('M65206', '○') in symbols['EE6892-365-61C']      # 同じ文字の「関連」も付くが、viewer は重いほう（○）を使う
     for s in secs:
-        data = cable_preview.build_viewer_data(cable_preview.render_base_svg(_dxf_bytes(s['drawing'])), s['drawing'], s['marks'], cable='M65206')
+        data = cable_preview.build_viewer_data(cable_preview.render_base_svg(_dxf_bytes(s['drawing'])), s['drawing'], s['marks'])
         assert data['missing'] == 0 and data['marked'] and data['count'] > 0, s['drawing']
     # 「関連」（照合の範囲）は viewer に出さない。選ばなかった他のケーブル（M65202 など）の文字も白のまま
     legend = [l[0] for l in cable_preview.build_viewer_data(
-        cable_preview.render_base_svg(_dxf_bytes('EE6892-610-01B')), 'x', secs[0]['marks'], cable='M65206')['legend']]
+        cable_preview.render_base_svg(_dxf_bytes('EE6892-610-01B')), 'x', secs[0]['marks'])['legend']]
     assert legend == ['× 不整合', '△ 一致（根拠が弱い）', '○ 一致']
 
 
@@ -348,7 +348,7 @@ def test_cable_focus_every_cable_of_every_schematic_has_matching_texts(result):
             for sec in cable_focus.focus(result, cable, d['drawing_number']):
                 if sec['drawing'] != d['drawing_number']:
                     continue
-                data = cable_preview.build_viewer_data(base, d['drawing_number'], sec['marks'], cable=cable)
+                data = cable_preview.build_viewer_data(base, d['drawing_number'], sec['marks'])
                 total += len(sec['marks'])
                 missing += data['missing']
     assert total > 0 and missing / total < 0.02, (missing, total)

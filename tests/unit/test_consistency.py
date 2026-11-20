@@ -880,3 +880,14 @@ def test_shapes_for_the_viewer_follow_the_wire_judgements_and_skip_wires_without
     assert len(paths) == 2                                                   # 端末の無い3本目は出ない
     _res, row = run(with_schematic(build()))
     assert [s for s in row['shapes'] if s['drawing'] == SCH_NAME] == []      # `_path` などが無い（旧形式）ときは図形なし
+
+
+def test_drawing_relations_lists_related_drawings_per_schematic_in_order():
+    """守るもの: `drawing_relations()`（図面の関係シートの元）は、展開接続図（405。図番順）ごとに、接続図パターンが当たった一覧表・その行の製作図・
+    注記の線番設定表を返す。関連が無い展開接続図は空のリスト。"""
+    from model.consistency import drawing_relations
+    ds = with_schematic(build(), keep_wire_table=True)
+    ds.append(drawing('EE0000-405-99A', set='405', kinds=[]))
+    rel = drawing_relations(ds)
+    assert [r[0] for r in rel] == sorted(r[0] for r in rel) and len(rel) == 2
+    assert dict((r[0], r[1:]) for r in rel) == {SCH_NAME: ([LIST_NAME], [WIRE_NAME], [FAB_NAME]), 'EE0000-405-99A': ([], [], [])}

@@ -4,15 +4,17 @@
 （`tests/unit/test_consistency_output.py` が、全項目・全根拠語が載っていることを確かめる）。
 """
 from . import consistency as C
+from .symbols import EXCEL_COLOR_NAMES, SYMBOLS, VIEWER_COLOR_NAMES
 
 # 記号: (意味, Excel のセル色, viewer の文字色)
-SYMBOL_ROWS = [
-    (C.OK, '一致。', '薄い緑', '緑'),
-    (C.WEAK, '一致だが根拠が弱い（近似・近傍・機器の配線・SG/SH を除けば一致）。', '薄い黄', '黄'),
-    (C.NG, '不整合（図面どうしで合わない）。', '薄いピンク', '赤'),
-    (C.UNREAD, '読めない（図面で確認が必要。端のラベルが取れない等）。', '薄い青', '青'),
-    (C.NA, '対象外・対象なし（一覧表の値が空、根拠となる図面が無い等）。セルの記号は、その項目の比較のうち最も重いもの（× ＞ ？ ＞ △ ＞ ○ ＞ －）。', '色なし', '紫'),
-]
+_MEANINGS = {
+    C.OK: '一致。',
+    C.WEAK: '一致だが根拠が弱い（近似・近傍・機器の配線・SG/SH を除けば一致）。',
+    C.NG: '不整合（図面どうしで合わない）。',
+    C.UNREAD: '読めない（図面で確認が必要。端のラベルが取れない等）。',
+    C.NA: '対象外・対象なし（一覧表の値が空、根拠となる図面が無い等）。セルの記号は、その項目の比較のうち最も重いもの（× ＞ ？ ＞ △ ＞ ○ ＞ －）。',
+}
+SYMBOL_ROWS = [(sym, _MEANINGS[sym], EXCEL_COLOR_NAMES[sym], VIEWER_COLOR_NAMES[sym]) for sym in SYMBOLS]
 
 # 項目ごとの判定（記号 → 条件）。キーは `consistency.item_column()` の列名
 _O, _W, _N, _U, _A = C.OK, C.WEAK, C.NG, C.UNREAD, C.NA

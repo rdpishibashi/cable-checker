@@ -32,7 +32,7 @@ def synthetic_result(extra_rows=()):
            'marks': [mk('L1', 1.0, 'M1', '○'), mk('W1', 2.0, 'S1', '△'), mk('F1', 7.0, '(WH)', '×'), mk('S1', 2.0, '(BK)', '○'),
                      mk('S1', 3.0, 'CN1', '×'), mk('S1', 3.0, 'CN1', '○')],
            'focus': {'list': 'L1', 'row': 3, 'fabs': ['F1'], 'wires': ['W1'], 'mine': [('W1', 1, 5), ('W1', 1, 6)], 'sel': [('W1', 1, 5)],
-                     'schematic': 'S1', 'occ': 0}}
+                     'schematic': 'S1'}}
     return {'drawings': [list_d, wire_d, fab_d, sch_d], 'rows': [row, *extra_rows],
             'extracts': {'405': [{'drawing_number': 'S1', 'cables': [{'cable': 'M2'}, {'cable': 'M1'}, {'cable': 'M1'}]}], '393': []}}
 
@@ -100,7 +100,7 @@ def test_viewer_data_colors_marked_texts_by_symbol_and_leaves_others_white():
     base = _base(['W No.M39001', 'AAA', 'BBB', 'W No.M39002'])
     marks = [{'anchor': (10, 40), 'text': 'W No.M39002', 'symbol': '関連'}, {'anchor': (10, 20), 'text': 'AAA', 'symbol': '○'}, {'anchor': (10, 30), 'text': 'BBB', 'symbol': '×'},
              {'anchor': (10, 20), 'text': 'AAA', 'symbol': '△'}, {'anchor': (99, 99), 'text': 'ZZZ', 'symbol': '？'}]
-    data = cable_preview.build_viewer_data(base, 'f.dxf', marks, cable='M39001')
+    data = cable_preview.build_viewer_data(base, 'f.dxf', marks)
     assert {c[2] for c in data['items']} == {'#ffd400', '#ff3030'}          # AAA は同じ文字の ○ と △ のうち重い △（黄）
     assert data['counts'] == {'△': 1, '×': 1} and data['missing'] == 1 and data['marked'] is True     # 「関連」のマークは表示しない
     assert [(l[0], l[2]) for l in data['legend']] == [('× 不整合', 1), ('△ 一致（根拠が弱い）', 1)]   # M39001・M39002 は白のまま

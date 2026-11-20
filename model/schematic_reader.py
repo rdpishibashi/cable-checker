@@ -626,6 +626,24 @@ def axis_rects(g, min_size=2.0, max_size=80.0):
     return sorted(rects)
 
 
+NARROW_MAX = 15.0      # 細長い枠の短辺の上限
+NARROW_LONG_MAX = 250.0  # 細長い枠の長辺の上限
+
+
+def narrow_rects(g, min_size=2.0, short_max=NARROW_MAX, long_max=NARROW_LONG_MAX, plain_max=60.0):
+    """`axis_rects` の上限（plain_max）を超える、細長い矩形のコネクタ枠。(x0, y0, x1, y1) の一覧。
+
+    多ピンのコネクタは、幅 9 × 高さ 175 のような細長い1つの枠で描かれる（EE6888-604-01A の CNESCD・CN1）。
+    短辺が short_max 以下・長辺が plain_max 超〜long_max 以下のものだけを返す。どちらの向きの枠も返すので、
+    芯線との向きの関係（直交する枠だけを端末にする）は `terminal_at` が見る。"""
+    out = []
+    for r in axis_rects(g, min_size, long_max):
+        w, h = r[2] - r[0], r[3] - r[1]
+        if min(w, h) <= short_max and max(w, h) > plain_max:
+            out.append(r)
+    return out
+
+
 def trace_wire(g, grid, k, start_pt=None, max_steps=60):
     """芯線 k を両方向に端点でつながる線分でたどり、両端点と経路を返す。分岐点で止める。
 
@@ -668,8 +686,13 @@ def text_in(g, box, pad=0.0):
     return [t for t in g.txts if x0 - pad <= t.cx <= x1 + pad and y0 - pad <= t.cy <= y1 + pad]
 
 
-def terminal_at(g, rects, E, wire_dir):
-    """芯線の端点 E のコネクタ枠（E が枠の辺から 1.5 以内）、ピン番号、コネクタ名。"""
+def terminal_at(g, rects, E, wire_dir, narrow=()):
+    """芯線の端点 E のコネクタ枠（E が枠の辺から 1.5 以内）、ピン番号、コネクタ名。
+
+    narrow は `narrow_rects()` の細長い枠。**芯線に直交する向きの枠だけ**を候補に加える（横の芯線なら縦長の枠）。
+    芯線に沿う細長い枠は、芯線の途中に置いた配線名の枠（`CM12` など）で、端末ではない。"""
+    horiz_wire = abs(wire_dir[0]) > abs(wire_dir[1])
+    rects = list(rects) + [r for r in narrow if ((r[3] - r[1]) > (r[2] - r[0])) == horiz_wire]
     best = None
     for r in rects:
         x0, y0, x1, y1 = r
@@ -807,13 +830,17 @@ def nearby_symbols(g, lab, max_d=12.0):
     return [], 'none'
 
 
-def inner_point(term, E):
-    """コネクタ枠の、ケーブルと反対側のすぐ外の点（ユニットの中）。円の端子は円の中心の反対側。"""
+def inner_point(term, E, wire_dir=None):
+    """コネクタ枠の、ケーブルと反対側のすぐ外の点（ユニットの中）。円の端子は円の中心の反対側。
+
+    枠のどの辺から出るかは、芯線の向き（wire_dir）で決める（細長い枠は中心への向きで決めると、辺の向きを取り違える）。
+    wire_dir が無いときは、枠の中心への向きで決める。"""
     if term and term.get('rect'):
         x0, y0, x1, y1 = term['rect']
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         dx, dy = cx - E[0], cy - E[1]
-        if abs(dx) >= abs(dy):
+        horiz = abs(wire_dir[0]) > abs(wire_dir[1]) if wire_dir is not None else abs(dx) >= abs(dy)
+        if horiz:
             return (x1 + 0.6, E[1]) if dx > 0 else (x0 - 0.6, E[1])
         return (E[0], y1 + 0.6) if dy > 0 else (E[0], y0 - 0.6)
     if term and term.get('center'):
@@ -1065,6 +1092,7 @@ def analyze_schematic(path, name):
 
     grid = Grid(g.segs)
     rects = axis_rects(g, 2.0, 60.0)             # コネクタ枠・端子台
+    narrow = narrow_rects(g)                     # 細長いコネクタ枠（芯線に直交するものだけ端末にする）
     device_rects = axis_rects(g, 2.0, 150.0)     # 機器の箱
     labels = link_labels(g, cable_labels(g), find_arrows(g, grid), grid)
     for lab in labels:
@@ -1091,8 +1119,8 @@ def analyze_schematic(path, name):
                 for E, _reason, path_ in trace_wire(g, grid, k):
                     path_all += [j for j in path_ if j not in path_all]
                     side = '-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+'
-                    term = terminal_at(g, rects, E, g.segs[path_[-1]].dir())   # 曲がった芯線は端の線分の向き
-                    ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E))
+                    term = terminal_at(g, rects, E, g.segs[path_[-1]].dir(), narrow)   # 曲がった芯線は端の線分の向き
+                    ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E, g.segs[path_[-1]].dir()))
                 wl = wire_label_texts(g, k, box)
                 wires.append({'labels': [t.s for t in wl], 'ends': ends, '_label_refs': [t.ref for t in wl],
                               '_path': _segs_of(g, path_all)})

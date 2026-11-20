@@ -62,18 +62,18 @@ EXPECTED_DISTRIBUTION = {
     '図面の対応｜製作図': (133, 0, 1, 0, 94),
     '図面の対応｜線番設定表': (38, 0, 2, 0, 188),
     '図面の対応｜展開接続図': (119, 0, 15, 0, 94),
-    '端末1｜ユニット': (28, 38, 16, 35, 111),
+    '端末1｜ユニット': (31, 39, 18, 29, 111),
     '端末1｜モジュール': (2, 0, 0, 13, 213),
-    '端末1｜機器符号': (85, 0, 16, 28, 99),
+    '端末1｜機器符号': (89, 0, 18, 22, 99),
     '端末1｜部品種別': (15, 0, 118, 0, 95),
-    '端末2｜ユニット': (38, 20, 11, 34, 125),
-    '端末2｜モジュール': (3, 0, 0, 14, 211),
-    '端末2｜機器符号': (73, 0, 11, 29, 115),
+    '端末2｜ユニット': (40, 21, 15, 27, 125),
+    '端末2｜モジュール': (3, 0, 0, 13, 212),
+    '端末2｜機器符号': (79, 0, 11, 23, 115),
     '端末2｜部品種別': (17, 0, 104, 0, 107),
     'ケーブル｜種類': (28, 0, 101, 0, 99),
     'ケーブル｜芯数': (51, 6, 45, 0, 126),
     '芯線｜線番': (38, 2, 7, 0, 181),
-    '芯線｜PIN': (48, 1, 13, 13, 153),
+    '芯線｜PIN': (54, 1, 11, 9, 153),
     '芯線｜色': (1, 0, 2, 0, 225),
 }
 
@@ -322,6 +322,20 @@ def test_device_codes_written_in_the_fab_drawing_are_highlighted_m39672(result):
     secs = {s['drawing']: s for s in cable_focus.focus(result, 'M39672', 'EE6676-601-02A')}
     marks = {(m['text'], m['symbol']) for m in secs['EE3298-551-99C']['marks']}
     assert {('X1B', '○'), ('CNDDADC', '○')} <= marks
+
+
+def test_tall_connector_frames_are_read_as_terminals_m74001(result):
+    """守るもの（ユーザー報告: 展開接続図 EE6888-604-01A の M74001 は、細長い四角形のコネクタ CNESCD・CN1 に芯線が接しているのに端末が
+    読めず、機器符号・PIN が ？ だった）: 幅 9 × 高さ約 175 の細長い枠（連絡枠の上限 60 超）を、芯線に直交する向きに限って端末として読む。
+    機器符号 CNESCD・CN1 と、枠の中の数字（PIN）が製作図 EE3298-509-02C の PIN と15本とも合う。端末1のユニット SYSTEM I/F BOX は領域で ○。
+    端末2のユニット ESC BOX は、枠が閉じていない（右辺に欠け）ため領域に取れず ×（残る課題）。"""
+    row = row_of(result, 'M74001')
+    cells = row['cells']
+    assert (cells['端末1｜機器符号'], cells['端末2｜機器符号'], cells['芯線｜PIN']) == ('○', '○', '○')
+    assert (cells['端末1｜ユニット'], cells['端末2｜ユニット']) == ('○', '×')
+    assert '15/15 本' in basis(result, row, '芯線｜PIN')
+    occ = [o for d in result['drawings'] if d['drawing_number'] == 'EE6888-604-01A' for o in d['schematic']['occurrences'] if o['cable'] == 'M74001']
+    assert [(w['ends']['-']['name'], w['ends']['+']['name']) for o in occ for w in o['wires']].count(('CNESCD', 'CN1')) == 15
 
 
 def test_cable_focus_m65206_acceptance(result):

@@ -148,14 +148,14 @@ def _section_title(role, drawing, counts=None):
     return f"{title}　{cable_focus.counts_label(counts)}" if counts is not None else title
 
 
-def _viewer_section(title, role, drawing, uploaded, cable, marks=None, default_open=False):
+def _viewer_section(title, role, drawing, uploaded, cable, marks=None, default_open=False, shapes=None):
     """図面1枚の開閉枠。開いているときだけ描画する（閉じた枠の図面は送らない）。"""
     key = f"drawing_exp_check_{role}_{drawing}_{cable}"
     with st.expander(title, expanded=default_open, key=key, on_change="rerun") as exp:
         if exp.open:
             cable_viewer.render_cable_viewer(
                 uploaded.name, uploaded.getvalue(), key=f"drawing_mount_check_{role}_{drawing}",
-                marks=marks, title=title, cable=cable if marks is not None and cable != cable_focus.NO_CABLE else None)
+                marks=marks, title=title, cable=cable if marks is not None and cable != cable_focus.NO_CABLE else None, shapes=shapes)
 
 
 def _related_drawings(texts, uploaded_by_stem):
@@ -207,7 +207,7 @@ def _render_drawing_section(result, files_405, files_393):
                 if target is None:
                     continue
                 _viewer_section(_section_title(sec['role'], sec['drawing'], sec['counts']), sec['role'], sec['drawing'], target, cable,
-                                marks=sec['marks'], default_open=sec['drawing'] == stem and sec['role'] == cable_focus.ROLE_SCHEMATIC)
+                                marks=sec['marks'], shapes=sec['shapes'], default_open=sec['drawing'] == stem and sec['role'] == cable_focus.ROLE_SCHEMATIC)
         for r in refs:
             for name in r['matches']:
                 if name != stem:

@@ -282,7 +282,8 @@ def trace(tables, segs, txts, arc_ends=()):
                     if not x.struck:
                         label_refs.append((norm(x.s), x.ref))
                     break
-        conns.append({'ends': ps, 'labels': list(dict.fromkeys(labels)), 'deleted': dead, 'nseg': len(segs_c), 'label_refs': label_refs})
+        conns.append({'ends': ps, 'labels': list(dict.fromkeys(labels)), 'deleted': dead, 'nseg': len(segs_c), 'label_refs': label_refs,
+                      'segs': [[tuple(p) for p in (s.p if s.p else ((s.x0, s.y0), (s.x1, s.y1)))] for s in segs_c]})
     return conns, ports
 
 
@@ -354,6 +355,7 @@ def connection_rows(res):
                          '線番': r.get('線番', ''), 'PIN No.': r.get('PIN', '')})
         rec = {'端の数': len(vals)}
         rec['_label_refs'] = c.get('label_refs', [])
+        rec['_segs'] = c.get('segs', [])
         for k, (ti, r, _s, _c) in enumerate(c['ends'][:2], 1):
             rec[f'_端{k}_refs'] = r.get('_refs', {})
         for k, v in enumerate(vals[:2], 1):

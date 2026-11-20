@@ -70,12 +70,13 @@ def _wire_row(d, table, row):
 def focus(result, cable: str, drawing_number: str) -> List[dict]:
     """選んだ展開接続図 drawing_number のケーブル cable に関連する図面とその強調。
 
-    Returns: 表示する順の [{'role': 役割, 'drawing': 図番, 'marks': [マーク], 'counts': {記号: 文字数}}]。
+    Returns: 表示する順の [{'role': 役割, 'drawing': 図番, 'marks': [マーク], 'shapes': [図形], 'counts': {記号: 文字数}}]。
     先頭は選んだ展開接続図。続いて 一覧表 → 線番設定表 → 製作図 → 照合に使った別の展開接続図（図番順）。
     強調する文字が1件も無い図面は含めない（選んだ展開接続図だけは常に含める）。"""
     by_name = {d['drawing_number']: d for d in result['drawings']}
     rows = [r for r in result['rows'] if r['ケーブル番号'] == cable]
     marks: Dict[tuple, list] = {}
+    shapes: Dict[tuple, list] = {}
     order = {ROLE_SCHEMATIC: [], ROLE_LIST: [], ROLE_WIRE: [], ROLE_FAB: []}
 
     def add(role, name, items):
@@ -91,6 +92,11 @@ def focus(result, cable: str, drawing_number: str) -> List[dict]:
             role = _role_of(by_name.get(m['drawing']), f, m['drawing'])
             if role:
                 add(role, m['drawing'], [m])
+        for sh in r.get('shapes', []):
+            role = _role_of(by_name.get(sh['drawing']), f, sh['drawing'])
+            if role:
+                add(role, sh['drawing'], [])
+                shapes.setdefault((role, sh['drawing']), []).append(sh)
         if not f:
             continue
         # 照合した行の関連する文字（紫）: 一覧表の行の全文字・線番設定表のこのケーブルの行の全文字
@@ -134,10 +140,22 @@ def focus(result, cable: str, drawing_number: str) -> List[dict]:
         for name in sorted(order[role]) if role != ROLE_SCHEMATIC else [drawing_number] + sorted(set(order[role]) - {drawing_number}):
             items = marks.get((role, name), [])
             # 「関連」（照合の範囲）だけで判定の記号が無い図面は、viewer に出しても色が付かないので並べない
-            if not any(m['symbol'] != RELATED for m in items) and not (role == ROLE_SCHEMATIC and name == drawing_number):
+            figs = _dedupe_shapes(shapes.get((role, name), []))
+            if not any(m['symbol'] != RELATED for m in items) and not figs and not (role == ROLE_SCHEMATIC and name == drawing_number):
                 continue
-            sections.append({'role': role, 'drawing': name, 'marks': items, 'counts': symbol_counts(items)})
+            sections.append({'role': role, 'drawing': name, 'marks': items, 'shapes': figs, 'counts': symbol_counts(items)})
     return sections
+
+
+def _dedupe_shapes(figs):
+    """同じ図形（種類と座標が同じ）は1つにする。一覧表の行が複数あるケーブルでは同じ出現・同じ接続を行ごとに照合するので、重いほうの記号を残す。"""
+    best: Dict[tuple, dict] = {}
+    for f in figs:
+        key = (f['kind'], repr(f['geom']))
+        cur = best.get(key)
+        if cur is None or cable_preview._SYMBOL_RANK[f['symbol']] < cable_preview._SYMBOL_RANK[cur['symbol']]:
+            best[key] = f
+    return list(best.values())
 
 
 def _role_of(drawing: Optional[dict], f: Optional[dict], name: str) -> Optional[str]:

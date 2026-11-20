@@ -320,6 +320,14 @@ def test_drawing_section_is_separate_from_the_preview_and_lists_the_drawings_of_
     assert not at.selectbox(key='drawing_select_check').value.endswith('（405）') and len(at.selectbox) == 2   # 393 ではケーブルの選択欄が無い
 
 
+def test_shapes_only_when_a_cable_is_selected(tmp_path, mounted):
+    """守るもの: 図形の強調はケーブルを選んだときだけ（選んでいないときの viewer の data に図形は無い）。"""
+    at = run_app(*both_sets(tmp_path))
+    run_check_click(at)
+    open_section(at)
+    assert mounted[-1]['data']['shapes'] == []
+
+
 def test_viewer_shows_warning_when_drawing_cannot_be_rendered_and_keeps_page(tmp_path, monkeypatch):
     """守るもの: 描けない図面は警告だけで、画面（プレビュー・ダウンロード）は壊れない。"""
     from view import cable_viewer
@@ -366,6 +374,8 @@ def test_selecting_a_cable_lists_the_related_drawings_in_collapsible_windows_wit
     at.run()
     assert mounted[-1]['data']['fname'] == 'EE6892-365-61C.dxf' and mounted[-1]['data']['marked']
     assert mounted[-1]['data']['legend'] and mounted[-1]['data']['count'] > 0
+    sch = next(m for m in mounted[n:] if m['data']['fname'] == 'EE1234-405-01A.dxf')['data']
+    assert sch['shapes'] and all(p['d'] and p['color'] for p in sch['shapes'])       # 展開接続図の図形（記号・引出線・芯線・端末）
 
 
 def schematic_with_reference_bytes(tmp_path, text='to POWER LINE (-405-08)'):

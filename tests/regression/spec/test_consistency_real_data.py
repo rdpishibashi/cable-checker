@@ -35,6 +35,7 @@
 """
 import glob
 import io
+import re
 import os
 
 import pandas as pd
@@ -376,3 +377,50 @@ def test_relation_sheet_real_data(result):
     assert len(frame) == 23
     row = frame[frame['展開接続図'] == 'EE6892-610-01B'].iloc[0]
     assert 'EE6892-365-61C' in row['ケーブル一覧表'] and 'EE3298-634-07E' in row['線番設定表'] and 'EE3298-534-07D' in row['ケーブル製作図']
+
+
+def test_cable_shapes_m65206_acceptance(result):
+    """守るもの（ユーザーの目視確認と同じ M65206）: 図形の強調。展開接続図 EE6892-610-01B は引出線・楕円が○、芯線2本は ○ と ×（色 (WH)≠(BK)）、
+    端末は端子の円（TBR1B）2つとコネクタ枠（CN1。2本の芯線で同じ枠）が○。製作図 EE3298-534-07D の接続の線は ○ と ×。一覧表・線番設定表に図形は無い。
+    図形はすべて図面の範囲（viewBox）に載る。"""
+    from model import cable_focus, cable_preview
+    secs = {s['drawing']: s for s in cable_focus.focus(result, 'M65206', 'EE6892-610-01B')}
+    sch = secs['EE6892-610-01B']['shapes']
+    assert {(s['kind'], s['symbol']) for s in sch if s['item'] == '図面の対応｜展開接続図'} == {('lines', '○'), ('ellipse', '○')}
+    assert sorted(s['symbol'] for s in sch if s['item'] == '芯線') == sorted(['○', '×'])
+    assert sorted((s['kind'], s['symbol']) for s in sch if s['kind'] in ('rect', 'circle')) == [('circle', '○')] * 2 + [('rect', '○')]    # 同じコネクタ枠 CN1 は1つにまとまる
+    assert sorted(s['symbol'] for s in secs['EE3298-534-07D']['shapes']) == sorted(['○', '×'])
+    assert secs['EE6892-365-61C']['shapes'] == [] and secs['EE3298-634-07E']['shapes'] == []
+    for name in ('EE6892-610-01B', 'EE3298-534-07D'):
+        base = cable_preview.render_base_svg(_dxf_bytes(name))
+        paths = cable_preview.shape_paths(base, secs[name]['shapes'])
+        nums = [float(v) for p in paths for v in re.findall(r'-?\d+\.\d', p['d'])]
+        assert paths and 0 <= min(nums) and max(nums) <= max(base.view_box) * 1.001, name
+
+
+def test_cable_shapes_never_paint_wires_without_both_ends(result):
+    """守るもの（S1）: 展開接続図の芯線の図形は、両端に端末がある芯線だけ。端末の無い芯線（EE6888-650-01C の M06019 が区画の枠線を拾う誤り）は塗らない。
+    全展開接続図の全ケーブルで、塗る芯線の数は『両端に端末がある芯線』の数を超えない。"""
+    from model import cable_focus
+    for d in result['drawings']:
+        s = d.get('schematic')
+        if d['set'] != '405' or not s:
+            continue
+        for cable in cable_focus.cables_in(result, d['drawing_number']):
+            n_ok = sum(all((w['ends'].get(side) or {}).get('kind') for side in '-+')
+                       for o in s['occurrences'] if o['cable'] == cable for w in o['wires'])
+            painted = sum(len([x for x in sec['shapes'] if x['item'] == '芯線'])
+                          for sec in cable_focus.focus(result, cable, d['drawing_number']) if sec['drawing'] == d['drawing_number'])
+            assert painted <= n_ok, (d['drawing_number'], cable, painted, n_ok)
+    bad = [sec for sec in cable_focus.focus(result, 'M06019', 'EE6888-650-01C') if sec['drawing'] == 'EE6888-650-01C']
+    assert all(x['item'] != '芯線' for sec in bad for x in sec['shapes'])
+
+
+def test_cable_shape_data_does_not_change_the_existing_counts(result):
+    """守るもの: 図形のために足した読み取りの座標は、既存の数（接続 456・描き方の分布）を変えない。"""
+    assert sum(len(d['fab_conns']) for d in result['drawings']) == 456
+    hows = {}
+    for d in result['drawings']:
+        for o in (d.get('schematic') or {}).get('occurrences', []):
+            hows[o['how']] = hows.get(o['how'], 0) + 1
+    assert hows == {'ellipse': 42, 'single': 32, 'via-line': 25, 'beside': 14, 'capsule': 13}

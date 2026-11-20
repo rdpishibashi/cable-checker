@@ -107,3 +107,42 @@ def test_viewer_data_colors_marked_texts_by_symbol_and_leaves_others_white():
     plain = cable_preview.build_viewer_data(base, 'f.dxf')
     assert plain['marked'] is False and plain['count'] == 2 and {c[2] for c in plain['items']} == {cable_preview.CABLE_COLOR}
     assert plain['legend'] == [['ケーブル番号', cable_preview.CABLE_COLOR, 2]]
+
+
+def test_focus_sections_carry_the_shapes_and_keep_a_drawing_that_has_only_shapes():
+    """守るもの: 図形（行の shapes）は図面ごとの section に入り、文字のマークが無くても図形があれば図面を並べる。"""
+    result = synthetic_result()
+    result['rows'][0]['shapes'] = [{'drawing': 'F1', 'kind': 'lines', 'geom': [[(0, 0), (1, 0)]], 'symbol': '○', 'item': '芯線'},
+                                   {'drawing': 'S1', 'kind': 'ellipse', 'geom': (0, 0, 2, 3), 'symbol': '×', 'item': '図面の対応｜展開接続図'}]
+    result['rows'][0]['marks'] = [m for m in result['rows'][0]['marks'] if m['drawing'] != 'F1']      # F1 は図形だけ
+    by = {s['drawing']: s for s in cable_focus.focus(result, 'M1', 'S1')}
+    assert [s['kind'] for s in by['F1']['shapes']] == ['lines'] and by['S1']['shapes'][0]['symbol'] == '×'
+    assert by['L1']['shapes'] == []
+
+
+def test_viewer_data_turns_shapes_into_svg_paths_in_viewbox_coordinates_ordered_by_severity():
+    """守るもの: 図形（DXF 座標）は viewBox 座標の SVG パスになり、記号ごとに1つにまとめる（色は文字と同じ）。重い記号ほど後（上）に描く。
+    線は M..L、楕円・円は円弧、長円は角丸、枠は閉じた長方形。shapes を渡さない（選択なし）ときは空。"""
+    base = _base(['AAA'])
+    shapes = [{'kind': 'lines', 'geom': [[(10.0, 20.0), (30.0, 20.0)]], 'symbol': '×'},
+              {'kind': 'ellipse', 'geom': (10.0, 10.0, 14.0, 16.0), 'symbol': '○'},
+              {'kind': 'capsule', 'geom': (10.0, 10.0, 20.0, 14.0), 'symbol': '○'},
+              {'kind': 'rect', 'geom': (0.0, 0.0, 5.0, 5.0), 'symbol': '△'},
+              {'kind': 'circle', 'geom': ((20.0, 20.0), 1.0), 'symbol': '－'}]
+    data = cable_preview.build_viewer_data(base, 'f.dxf', [], shapes=shapes)
+    assert [(s['symbol'], s['count']) for s in data['shapes']] == [('－', 1), ('○', 2), ('△', 1), ('×', 1)]
+    assert {s['symbol']: s['color'] for s in data['shapes']} == {'－': '#c080ff', '○': '#33dd66', '△': '#ffd400', '×': '#ff3030'}
+    line = next(s for s in data['shapes'] if s['symbol'] == '×')['d']
+    (x0, y0), (x1, y1) = cable_preview.to_svg(base, 10.0, 20.0), cable_preview.to_svg(base, 30.0, 20.0)
+    assert line == f"M {x0:.1f} {y0:.1f} L {x1:.1f} {y1:.1f}"
+    assert next(s for s in data['shapes'] if s['symbol'] == '○')['d'].count('A') == 2 + 4
+    assert cable_preview.build_viewer_data(base, 'f.dxf')['shapes'] == []
+
+
+def test_identical_shapes_from_several_list_rows_are_merged_keeping_the_heavier_symbol():
+    """守るもの: 一覧表の行が複数あるケーブルは同じ図形が行ごとに出るので、1つにまとめる（重いほうの記号）。"""
+    result = synthetic_result()
+    fig = {'drawing': 'F1', 'kind': 'lines', 'geom': [[(0, 0), (1, 0)]], 'item': '芯線'}
+    result['rows'][0]['shapes'] = [{**fig, 'symbol': '○'}, {**fig, 'symbol': '×'}]
+    by = {s['drawing']: s for s in cable_focus.focus(result, 'M1', 'S1')}
+    assert [(f['kind'], f['symbol']) for f in by['F1']['shapes']] == [('lines', '×')]

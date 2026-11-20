@@ -1155,6 +1155,54 @@ def _row_marks(ctx, list_name, row, cells, ch, sel, pick, mat, multi, fab_conns)
     return out
 
 
+def _shape(drawing, kind, geom, symbol, item):
+    return {'drawing': drawing, 'kind': kind, 'geom': geom, 'symbol': symbol, 'item': item}
+
+
+def _wire_symbol(r):
+    """芯線・接続の図形の記号: PIN・線番・色の判定のうち、－ を除いて最も重いもの（全部 － なら －）。"""
+    syms = [r[k] for k in ('判定_PIN', '判定_線番', '判定_色') if r[k] != NA]
+    return _worst(syms) if syms else NA
+
+
+def _row_shapes(cells, pick, mat, fab_conns):
+    """一覧表の1行の照合結果に対応する、図面上の図形の強調（viewer 用）。
+
+    [{'drawing', 'kind': 'lines'|'ellipse'|'capsule'|'rect'|'circle', 'geom', 'symbol', 'item'}]（geom は DXF 座標。lines は線分の
+    リスト、ellipse・capsule・rect は外接矩形、circle は (中心, 半径)）。照合の記号・根拠は変えない。
+    製作図: 接続の線＝その接続の判定。展開接続図: 引出線・記号＝「図面の対応｜展開接続図」、芯線＝割り当てた接続の判定（**両端に端末が
+    ある芯線だけ**。端末の無い芯線は塗らない）、端末＝「端末｜機器符号」。機器の箱は塗らない。"""
+    out = []
+    for j, (d, c) in enumerate(fab_conns):
+        r = mat['rows'][j] if j < len(mat['rows']) else None
+        if c.get('_segs'):
+            out.append(_shape(d['drawing_number'], 'lines', c['_segs'], _wire_symbol(r) if r else NA, '芯線'))
+    if pick is None:
+        return out
+    dn, occ, orient = pick['drawing']['drawing_number'], pick['occ'], pick['orient']
+    sym = _combine(_cmp(cells, item_column('図面の対応', '展開接続図'), '展開接続図'))
+    if occ.get('_leader'):
+        out.append(_shape(dn, 'lines', occ['_leader'], sym, '図面の対応｜展開接続図'))
+    for s in occ.get('_symbols', []):
+        out.append(_shape(dn, s['shape'], s['box'], sym, '図面の対応｜展開接続図'))
+    assigned = {id(r['wire']['src']): r for r in mat['rows'] if r.get('wire')}
+    for w in occ['wires']:
+        if not all((w['ends'].get(s) or {}).get('kind') for s in '-+'):
+            continue                                       # 端末の無い芯線は塗らない（取りこぼしより誤りを避ける）
+        r = assigned.get(id(w))
+        if w.get('_path'):
+            out.append(_shape(dn, 'lines', w['_path'], _wire_symbol(r) if r else NA, '芯線'))
+    for i in (1, 2):
+        code_sym = _combine(_cmp(cells, item_column(f'端末{i}', '機器符号'), '展開接続図'))
+        for w in occ['wires']:
+            shape = (w['ends'].get(orient['sides'][i]) or {}).get('_shape')
+            if shape and 'rect' in shape:
+                out.append(_shape(dn, 'rect', shape['rect'], code_sym, f'端末{i}｜機器符号'))
+            elif shape and 'circle' in shape:
+                out.append(_shape(dn, 'circle', shape['circle'], code_sym, f'端末{i}｜機器符号'))
+    return out
+
+
 def _evaluate_row(ctx, list_name, row):
     """一覧表の1行について、全項目のセルと芯線照合の行を作る。Returns: ({項目の列名: [セル]}, 芯線照合の行)"""
     cable = row['ケーブル番号']
@@ -1210,7 +1258,8 @@ def _evaluate_row(ctx, list_name, row):
              'schematic': pick['drawing']['drawing_number'] if pick is not None else '',
              'occ': next((n for n, o in enumerate(pick['schematic']['occurrences']) if o is pick['occ']), None) if pick is not None else None}
     marks = _row_marks(ctx, list_name, row, cells, ch, sel, pick, mat, multi, fab_conns)
-    return cells, wire_rows, marks, focus
+    shapes = _row_shapes(cells, pick, mat, fab_conns)
+    return cells, wire_rows, marks, focus, shapes
 
 
 def _orphan_cells(cable, wire_drawings, schematic_drawings):
@@ -1267,12 +1316,12 @@ def check_consistency(drawings):
     rows, details, wires = [], [], []
     for cable, list_name, row_no, row, info in work:
         if row is not None:
-            cells, wire_rows, marks, focus = _evaluate_row(ctx, list_name, row)
+            cells, wire_rows, marks, focus, shapes = _evaluate_row(ctx, list_name, row)
         else:
-            cells, wire_rows, marks, focus = _orphan_cells(cable, sorted(info['wire']), sorted(info['schematic'])), [], [], None
+            cells, wire_rows, marks, focus, shapes = _orphan_cells(cable, sorted(info['wire']), sorted(info['schematic'])), [], [], None, []
         wires += wire_rows
         out = {'ケーブル番号': cable, '一覧表の図番': list_name, '一覧表の行': row_no or '', 'cells': {}, 'links': {},
-               'marks': marks, 'focus': focus}
+               'marks': marks, 'focus': focus, 'shapes': shapes}
         n_ng = n_unread = 0
         for col in ITEM_COLUMNS:
             group = cells[col]

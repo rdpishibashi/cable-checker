@@ -348,7 +348,7 @@ def test_cable_focus_every_cable_of_every_schematic_has_matching_texts(result):
             for sec in cable_focus.focus(result, cable, d['drawing_number']):
                 if sec['drawing'] != d['drawing_number']:
                     continue
-                data = cable_preview.build_viewer_data(base, d['drawing_number'], sec['marks'], cable=cable)
+                data = cable_preview.build_viewer_data(base, d['drawing_number'], sec['marks'])
                 total += len(sec['marks'])
                 missing += data['missing']
     assert total > 0 and missing / total < 0.02, (missing, total)

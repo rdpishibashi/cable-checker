@@ -156,7 +156,7 @@ def _viewer_section(title, role, drawing, uploaded, cable, marks=None, default_o
         if exp.open:
             cable_viewer.render_cable_viewer(
                 uploaded.name, uploaded.getvalue(), key=f"drawing_mount_check_{role}_{drawing}",
-                marks=marks, title=title, cable=cable if marks is not None and cable != cable_focus.NO_CABLE else None, shapes=shapes)
+                marks=marks, title=title, shapes=shapes)
 
 
 def _related_drawings(texts, uploaded_by_stem):

@@ -277,7 +277,7 @@ def _squash(s: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize('NFKC', s or '')).upper()
 
 
-def apply_marks(base: BaseRender, marks, cable: Optional[str] = None) -> Tuple[list, dict, int]:
+def apply_marks(base: BaseRender, marks) -> Tuple[list, dict, int]:
     """マーク（[{'anchor': (x, y), 'text': 文字, 'symbol': 記号|'関連'}]）を、描画した文字のクラスに対応づける。
 
     突き合わせは基準点（`text_anchor`）。同じ基準点に文字が複数あるときだけ文字列（空白除去・大文字）で絞る。
@@ -353,7 +353,7 @@ def shape_paths(base: BaseRender, shapes) -> List[dict]:
             for sym in order if sym in by_symbol]
 
 
-def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cable=None, shapes=None) -> dict:
+def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, shapes=None) -> dict:
     """viewer 部品に渡す data（JSON 化できる dict）を作る。
 
     marks が None: ケーブル番号を含む文字を赤にする（選んだケーブルが無いとき）。
@@ -366,7 +366,7 @@ def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cabl
         legend = [['ケーブル番号', CABLE_COLOR, count]]
         counts, missing = {}, 0
     else:
-        items, counts, missing = apply_marks(base, marks, cable)
+        items, counts, missing = apply_marks(base, marks)
         count = sum(counts.values())
         legend = [[LABELS[sym], SYMBOL_TEXT_COLORS[sym], counts[sym]] for sym in BY_SEVERITY if sym in counts]
     return {

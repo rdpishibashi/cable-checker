@@ -762,11 +762,6 @@ def wire_label_texts(g, k, sym_box=None):
     return [t for _d, _s, t in sorted(out, key=lambda v: (v[0], v[1]))]
 
 
-def wire_labels(g, k, sym_box=None):
-    """`wire_label_texts` の文字列版。"""
-    return [t.s for t in wire_label_texts(g, k, sym_box)]
-
-
 def nearby_symbols(g, lab, max_d=12.0):
     """引出線の無いケーブル番号（円筒の横に置くだけ）: 文字の中心から max_d 以内で最も近い閉じた楕円と、
     同じ中心線上の同じ大きさの楕円（円筒のもう一方の端）。"""

@@ -1055,8 +1055,7 @@ def _evaluate_row(ctx, list_name, row):
              'wires': [d['drawing_number'] for d in ch['wires']] if ch['wire_ok'] else [],
              'mine': [(d['drawing_number'], r['表'], r['行']) for d, r in ch['mine']],
              'sel': [(x['drawing']['drawing_number'], x['row']['表'], x['row']['行']) for x in sel],
-             'schematic': pick['drawing']['drawing_number'] if pick is not None else '',
-             'occ': next((n for n, o in enumerate(pick['schematic']['occurrences']) if o is pick['occ']), None) if pick is not None else None}
+             'schematic': pick['drawing']['drawing_number'] if pick is not None else ''}
     marks = highlights.row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns)
     shapes = highlights.row_shapes(cells, pick, mat, fab_conns)
     return cells, wire_rows, marks, focus, shapes

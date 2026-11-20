@@ -270,6 +270,41 @@ def test_part_type_match_is_literal_ignoring_spaces_and_case_only():
     assert sym(ds, 'kind') == NG                  # サイズ・芯数の形への読み替えはしない
 
 
+# ---------------------------------------------------------------- 機器符号と製作図の文字
+
+def _fab_refs(*texts):
+    return [(t, (float(i), 0.0)) for i, t in enumerate(texts)]
+
+
+def test_device_code_found_in_fab_text_adds_an_ok_fab_comparison_and_marks_the_text():
+    """守るもの: 機器符号が製作図の文字1つ全体と一致すれば ○（製作図の根拠）。viewer はその文字を強調する（以前は製作図の機器符号に色が付かなかった）。"""
+    ds = build()
+    by_name(ds, FAB_NAME)['fab_text_refs'] = _fab_refs('X', 'TBR1B', 'TBR1BX')
+    s, basis = cell(ds, 'c1')
+    assert s == OK and '製作図' in basis
+    marks = check_consistency(ds)['rows'][0]['marks']
+    fab = [m for m in marks if m['drawing'] == FAB_NAME and m['item'] == '端末1｜機器符号']
+    assert [(m['text'], m['symbol']) for m in fab] == [('TBR1B', OK)]      # 部分一致の `TBR1BX` は強調しない
+
+
+def test_device_code_absent_from_fab_text_is_not_a_fab_comparison():
+    """守るもの: 製作図は機器符号を書かない様式が多い（実データで × にすると、○ だった機器符号のセル122件が × に変わった）ので、無いことは × にしない。比較自体を加えない。"""
+    ds = build()
+    by_name(ds, FAB_NAME)['fab_text_refs'] = _fab_refs('OTHER')
+    s, basis = cell(ds, 'c1')
+    assert s == OK and '製作図' not in basis                                # 線番設定表の ○ のまま
+    assert not [m for m in check_consistency(ds)['rows'][0]['marks'] if m['drawing'] == FAB_NAME and m['item'] == '端末1｜機器符号']
+
+
+def test_device_code_fab_match_supports_wildcard_and_needs_all_values():
+    ds = build()
+    by_name(ds, LIST_NAME)['list_rows'][0]['端末1_機器符号'] = 'TBR1*'
+    by_name(ds, FAB_NAME)['fab_text_refs'] = _fab_refs('TBR1B')
+    assert '製作図' in cell(ds, 'c1')[1]
+    by_name(ds, LIST_NAME)['list_rows'][0]['端末1_機器符号'] = 'TBR1B,TBR2B'      # 複数値は全部が見つからなければ比較しない
+    assert '製作図' not in cell(ds, 'c1')[1]
+
+
 # ---------------------------------------------------------------- 線番設定表との照合（端末のユニット・機器符号・モジュール）
 
 def test_unit_must_match_the_wire_table_destination_and_prefix_is_weak():

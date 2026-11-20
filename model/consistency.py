@@ -32,7 +32,7 @@ from collections import Counter
 from . import cable_list_table, fab_drawing, wire_number_table
 from .cable_compare import compare_extracts
 from .cable_extractor import extract_cables
-from .cell_values import SEP, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
+from .cell_values import SEP, code_matches_name, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
 from .cell_values import side as _side, squash as _squash, values as _values
 from . import highlights
 from .drawing_geometry import load
@@ -310,15 +310,7 @@ def _core_count(row):
 
 def _code_match(code, names):
     """一覧表の機器符号（`*` は任意の1文字）が、405 の端の名前（1行目・括弧の前）にあるか。`GND` を含めば `GND` を含む名前と一致。"""
-    c = _squash(code)
-    if 'GND' in c:
-        return any('GND' in _squash(n) for n in names)
-    rx = re.compile('^' + ''.join('.' if ch == '*' else re.escape(ch) for ch in c) + '$')
-    for n in names:
-        first = _squash(n.split('\n')[0])
-        if rx.match(first) or rx.match(first.split('(')[0]):
-            return True
-    return False
+    return any(code_matches_name(code, n) for n in names)
 
 
 def _term_match(term, codes):
@@ -575,8 +567,8 @@ def _unit_405_one(ctx, u, m, ev, gnd):
     return NG, '合わない（' + '／'.join(detail) + '）', None
 
 
-def _terminal_cells(ctx, row, i, sel, mine, pick):
-    """端末 i（1・2）の ユニット・モジュール・機器符号 のセル。"""
+def _terminal_cells(ctx, row, i, sel, mine, pick, fabs=(), fab_ok=False):
+    """端末 i（1・2）の ユニット・モジュール・機器符号 のセル。fabs・fab_ok は解決した製作図（機器符号を製作図の文字とも比べる）。"""
     unit_cell, mod_cell, code_cell = _Cell(f'端末{i} ユニット'), _Cell(f'端末{i} モジュール'), _Cell(f'端末{i} 機器符号')
     units = _values(row.get(f'端末{i}_ユニット'))
     module = row.get(f'端末{i}_モジュール') or ''
@@ -675,6 +667,14 @@ def _terminal_cells(ctx, row, i, sel, mine, pick):
                             mod_cell.add('展開接続図', UNREAD, f'モジュールの記載が見つからない（{"、".join(decided)}）')
                     elif unit_cell.symbol == UNREAD:
                         mod_cell.add('展開接続図', UNREAD, B_UNREAD)
+    # --- ケーブル製作図（機器符号は、製作図の文字1つ全体と一致するか。部品種別のような部分一致にはしない）
+    # 製作図の多くは機器符号を書かない様式なので、無いことは不整合の根拠にしない: すべて見つかれば ○、そうでなければ比較しない。
+    if codes and fab_ok and fabs:
+        texts = [t for d in fabs for t, _ in d.get('fab_text_refs', [])]
+        if all(_code_match(c, texts) for c in codes):
+            code_cell.source(*(d['drawing_number'] for d in fabs))
+            code_cell.value('製作図', '、'.join(codes))
+            code_cell.add('製作図', OK, B_MATCH)
     if not units:
         unit_cell.comparisons = []
         unit_cell.note = B_EMPTY
@@ -1016,7 +1016,7 @@ def _evaluate_row(ctx, list_name, row):
     for key, lst in _correspondence_cells(ctx, row, ch, list_name, pick).items():
         cells[item_column('図面の対応', key)] = lst
     for i in (1, 2):
-        unit_cell, mod_cell, code_cell = _terminal_cells(ctx, row, i, sel, ch['mine'], pick)
+        unit_cell, mod_cell, code_cell = _terminal_cells(ctx, row, i, sel, ch['mine'], pick, ch['fabs'], ch['fab_ok'])
         part = _fab_text_cell(f'端末{i} 部品種別', _values(row.get(f'端末{i}_部品種別')), ch['fabs'], ch['fab_ok'])
         for name, c in (('ユニット', unit_cell), ('モジュール', mod_cell), ('機器符号', code_cell), ('部品種別', part)):
             cells[item_column(f'端末{i}', name)] = [c]

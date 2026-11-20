@@ -7,7 +7,7 @@
 """
 import re
 
-from .cell_values import is_color as _is_color, item_column, side as _side, squash as _squash, values as _values
+from .cell_values import code_matches_name, codes as _codes, is_color as _is_color, item_column, side as _side, squash as _squash, values as _values
 from .symbols import NA, worst as _worst
 
 
@@ -70,13 +70,18 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
             out += _marks_of(dn, [(text, ref)], (r['判定_色'] if r and _is_color(text) else NA), '芯線｜色')
     for d in ch['fabs']:
         dn = d['drawing_number']
-        for g, n, field in (('端末1', '部品種別', '端末1_部品種別'), ('端末2', '部品種別', '端末2_部品種別'), ('ケーブル', '種類', 'ケーブル種類')):
+        for g, n, field in (('端末1', '部品種別', '端末1_部品種別'), ('端末2', '部品種別', '端末2_部品種別'), ('ケーブル', '種類', 'ケーブル種類'),
+                            ('端末1', '機器符号', '端末1_機器符号'), ('端末2', '機器符号', '端末2_機器符号')):
             sym = _cmp(cells, col(g, n), '製作図')
             if sym is None:
                 continue
-            for v in _values(row.get(field)):
+            for v in (_codes if n == '機器符号' else _values)(row.get(field)):
                 key = _squash(v)
-                out += _marks_of(dn, [(t, ref) for t, ref in d.get('fab_text_refs', []) if key and key in _squash(t)], sym, f'{g}｜{n}')
+                if n == '機器符号':      # 製作図の文字1つ全体との一致（照合と同じ規則）
+                    hit = [(t, ref) for t, ref in d.get('fab_text_refs', []) if code_matches_name(v, t)]
+                else:
+                    hit = [(t, ref) for t, ref in d.get('fab_text_refs', []) if key and key in _squash(t)]
+                out += _marks_of(dn, hit, sym, f'{g}｜{n}')
     # --- 展開接続図（照合に使った出現）
     if pick is not None:
         dn, occ, orient = pick['drawing']['drawing_number'], pick['occ'], pick['orient']

@@ -64,11 +64,11 @@ EXPECTED_DISTRIBUTION = {
     '図面の対応｜展開接続図': (119, 0, 15, 0, 94),
     '端末1｜ユニット': (28, 38, 16, 35, 111),
     '端末1｜モジュール': (2, 0, 0, 13, 213),
-    '端末1｜機器符号': (75, 0, 16, 28, 109),
+    '端末1｜機器符号': (85, 0, 16, 28, 99),
     '端末1｜部品種別': (15, 0, 118, 0, 95),
     '端末2｜ユニット': (38, 20, 11, 34, 125),
     '端末2｜モジュール': (3, 0, 0, 14, 211),
-    '端末2｜機器符号': (66, 0, 11, 29, 122),
+    '端末2｜機器符号': (73, 0, 11, 29, 115),
     '端末2｜部品種別': (17, 0, 104, 0, 107),
     'ケーブル｜種類': (28, 0, 101, 0, 99),
     'ケーブル｜芯数': (51, 6, 45, 0, 126),
@@ -309,6 +309,19 @@ def _dxf_bytes(name):
         if os.path.exists(path):
             return open(path, 'rb').read()
     raise AssertionError(name)
+
+
+def test_device_codes_written_in_the_fab_drawing_are_highlighted_m39672(result):
+    """守るもの（ユーザー報告: 展開接続図 EE6676-601-02A で M39672 を選ぶと、展開接続図・一覧表の CNDDADC・X1B は強調されるのに、
+    製作図 EE3298-551-99C のこの2文字だけ白かった）: 機器符号を製作図の文字とも比べ、一致した文字を ○ で強調する。
+    製作図が機器符号を書かない場合は × にしない（比較しない）。この図面だけ線番設定表が無いので、機器符号の根拠は 405・393 の2つ。"""
+    from model import cable_focus
+    row = row_of(result, 'M39672')
+    assert row['cells']['端末1｜機器符号'] == '○' and row['cells']['端末2｜機器符号'] == '○'
+    assert '製作図' in basis(result, row, '端末1｜機器符号') and '製作図' in basis(result, row, '端末2｜機器符号')
+    secs = {s['drawing']: s for s in cable_focus.focus(result, 'M39672', 'EE6676-601-02A')}
+    marks = {(m['text'], m['symbol']) for m in secs['EE3298-551-99C']['marks']}
+    assert {('X1B', '○'), ('CNDDADC', '○')} <= marks
 
 
 def test_cable_focus_m65206_acceptance(result):

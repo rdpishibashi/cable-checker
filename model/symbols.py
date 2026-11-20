@@ -25,6 +25,9 @@ VIEWER_COLORS = {OK: '#33dd66', WEAK: '#ffd400', NG: '#ff3030', UNREAD: '#4da6ff
 EXCEL_COLOR_NAMES = {OK: '薄い緑', WEAK: '薄い黄', NG: '薄いピンク', UNREAD: '薄い青', NA: '色なし'}
 VIEWER_COLOR_NAMES = {OK: '緑', WEAK: '黄', NG: '赤', UNREAD: '青', NA: '紫'}
 
+# viewer の左枠（凡例）の表示順: ○ → △ → × → ？ → －（図形の行も同じ順。重さの順 BY_SEVERITY とは別）
+LEGEND_ORDER = [OK, WEAK, NG, UNREAD, NA, RELATED]
+
 # viewer の凡例の文言
 LABELS = {OK: '○ 一致', WEAK: '△ 一致（根拠が弱い）', NG: '× 不整合', UNREAD: '？ 読めない', NA: '－ 対象外', RELATED: '関連（照合に使っていない）'}
 

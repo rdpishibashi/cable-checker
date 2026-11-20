@@ -30,7 +30,7 @@ from .cable_extractor import find_cables
 from .common_utils import is_invisible
 from .drawing_geometry import text_anchor
 from .extract_labels import extract_text_from_entity
-from .symbols import BY_SEVERITY, LABELS, RELATED, VIEWER_COLORS, rank
+from .symbols import BY_SEVERITY, LABELS, LEGEND_ORDER, RELATED, VIEWER_COLORS, rank
 
 SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", SVG_NS)
@@ -358,7 +358,7 @@ def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, shap
 
     marks が None: ケーブル番号を含む文字を赤にする（選んだケーブルが無いとき）。
     marks あり: マークの記号の色で文字を塗る（`apply_marks`。「関連」のマークは表示しない）。他の文字は白。
-    items: 色を変える文字の CSS クラス [[クラス名, 'fill'|'stroke', 色], ...]／legend: 凡例 [[ラベル, 色, 件数], ...]／
+    items: 色を変える文字の CSS クラス [[クラス名, 'fill'|'stroke', 色], ...]／legend: 凡例 [[ラベル, 色, 件数], ...]（○ △ × ？ － の順。左枠は件数を出さない）／shapeLegend: 図形の凡例 [[記号, 色], ...]（同じ順）／
     count: 色を変えた文字の数／missing: 突き合わせできなかったマークの数／counts: 記号ごとの件数（見出しに使う）。"""
     if marks is None:
         classes, count = cable_classes(base)
@@ -368,11 +368,14 @@ def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, shap
     else:
         items, counts, missing = apply_marks(base, marks)
         count = sum(counts.values())
-        legend = [[LABELS[sym], SYMBOL_TEXT_COLORS[sym], counts[sym]] for sym in BY_SEVERITY if sym in counts]
-    return {
+        legend = [[LABELS[sym], SYMBOL_TEXT_COLORS[sym], counts[sym]] for sym in LEGEND_ORDER if sym in counts]
+    data = {
         "fname": fname, "title": title or fname, "viewBox": [base.view_box[0], base.view_box[1]],
         "svg": base.inner_svg, "sig": f"{fname}:{len(base.inner_svg)}:{hash(base.inner_svg) & 0xffffffff}",
         "empty": base.empty, "hasFont": base.cjk_font is not None,
         "color": CABLE_COLOR, "items": items, "legend": legend, "count": count, "counts": counts, "missing": missing,
         "marked": marks is not None, "shapes": shape_paths(base, shapes or []),
     }
+    # 左枠（凡例）の図形の行は、描画の順（軽い記号から）ではなく、凡例の順（○ △ × ？ －）で出す
+    data["shapeLegend"] = [[s["symbol"], s["color"]] for s in sorted(data["shapes"], key=lambda s: LEGEND_ORDER.index(s["symbol"]))]
+    return data

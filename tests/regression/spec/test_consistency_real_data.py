@@ -386,7 +386,7 @@ def test_cable_focus_m65206_acceptance(result):
     # 「関連」（照合の範囲）は viewer に出さない。選ばなかった他のケーブル（M65202 など）の文字も白のまま
     legend = [l[0] for l in cable_preview.build_viewer_data(
         cable_preview.render_base_svg(_dxf_bytes('EE6892-610-01B')), 'x', secs[0]['marks'])['legend']]
-    assert legend == ['× 不整合', '△ 一致（根拠が弱い）', '○ 一致']
+    assert legend == ['○ 一致', '△ 一致（根拠が弱い）', '× 不整合']
 
 
 def test_cable_focus_every_cable_of_every_schematic_has_matching_texts(result):

@@ -300,3 +300,70 @@ def test_excel_matches_preview_and_has_all_rows(result):
         if name != '整合性チェック':                 # 2段見出し（行数が2行多く読まれる）
             assert len(book[name]) == len(frame), name
     assert len(book['整合性チェック']) == 228 + 1       # 2段目の見出し（項目名）が1行目のデータとして読まれる
+
+
+def _dxf_bytes(name):
+    for folder in (DATA_405_DIR, DATA_DIR):
+        path = os.path.join(folder, name + '.dxf')
+        if os.path.exists(path):
+            return open(path, 'rb').read()
+    raise AssertionError(name)
+
+
+def test_cable_focus_m65206_acceptance(result):
+    """守るもの（ユーザーの目視確認と同じ M65206）: 展開接続図 EE6892-610-01B で M65206 を選ぶと、一覧表 → 線番設定表 → 製作図が並び、
+    各図面の強調は照合の結果（×＝製作図の (WH)・展開接続図の (BK) の色、△＝端末2 の ALS1 の近傍）と一致する。全マークが図面の文字に当たる。"""
+    from model import cable_focus, cable_preview
+    secs = cable_focus.focus(result, 'M65206', 'EE6892-610-01B')
+    assert [(s['role'], s['drawing']) for s in secs] == [
+        ('展開接続図', 'EE6892-610-01B'), ('ケーブル一覧表', 'EE6892-365-61C'), ('線番設定表', 'EE3298-634-07E'), ('ケーブル製作図', 'EE3298-534-07D')]
+    assert [cable_focus.counts_label(s['counts']) for s in secs] == ['×1 ？0 △1 ○9', '×0 ？0 △1 ○10', '×0 ？0 △2 ○8', '×1 ？0 △0 ○8']
+    symbols = {s['drawing']: {(m['text'], m['symbol']) for m in s['marks']} for s in secs}
+    assert ('(WH)', '×') in symbols['EE3298-534-07D'] and ('(BK)', '×') in symbols['EE6892-610-01B']
+    assert ('ALS1', '△') in symbols['EE6892-365-61C'] and ('ALS1 R1', '△') in symbols['EE3298-634-07E']
+    assert ('M65206', '○') in symbols['EE6892-365-61C']      # 同じ文字の「関連」も付くが、viewer は重いほう（○）を使う
+    for s in secs:
+        data = cable_preview.build_viewer_data(cable_preview.render_base_svg(_dxf_bytes(s['drawing'])), s['drawing'], s['marks'], cable='M65206')
+        assert data['missing'] == 0 and data['marked'] and data['count'] > 0, s['drawing']
+    # 選ばなかった他のケーブル（M65202 など）の文字は白のまま（強調は選んだケーブルだけ）
+    legend = {l[0]: l[2] for l in cable_preview.build_viewer_data(
+        cable_preview.render_base_svg(_dxf_bytes('EE6892-610-01B')), 'x', secs[0]['marks'], cable='M65206')['legend']}
+    assert legend['関連（照合に使っていない）'] >= 1
+
+
+def test_cable_focus_every_cable_of_every_schematic_has_matching_texts(result):
+    """守るもの: 展開接続図のどのケーブルを選んでも、読み取りで得たマークが図面の文字（基準点）に当たる（missing が出るのは ATTRIB の文字だけ）。
+    選択肢はその図面の抽出結果と一致する。"""
+    from model import cable_focus, cable_preview
+    total = missing = 0
+    for d in result['drawings']:
+        s = d.get('schematic')
+        if d['set'] != '405' or not s:
+            continue
+        base = cable_preview.render_base_svg(_dxf_bytes(d['drawing_number']))
+        cables = cable_focus.cables_in(result, d['drawing_number'])
+        assert cables and set(cables) >= {o['cable'] for o in s['occurrences']}
+        for cable in cables:
+            for sec in cable_focus.focus(result, cable, d['drawing_number']):
+                if sec['drawing'] != d['drawing_number']:
+                    continue
+                data = cable_preview.build_viewer_data(base, d['drawing_number'], sec['marks'], cable=cable)
+                total += len(sec['marks'])
+                missing += data['missing']
+    assert total > 0 and missing / total < 0.02, (missing, total)
+
+
+def test_drawing_refs_agree_with_the_references_the_schematic_reader_found(result):
+    """守るもの: 画面の「関連図面」（描画した文字から拾う）が、展開接続図として読んだ18枚で、読み取りの図中の参照のパターンと一致する。
+    EE6892-405-08A に当たる参照は `-405-08`（アップロードした 405 のセット内）。"""
+    from model import cable_focus, cable_preview
+    names = [d['drawing_number'] for d in result['drawings']]
+    read = [d for d in result['drawings'] if d.get('schematic')]
+    assert len(read) == 18
+    for d in read:
+        texts = [t['text'] for t in cable_preview.render_base_svg(_dxf_bytes(d['drawing_number'])).texts]
+        got = {r['pattern'] for r in cable_focus.drawing_refs(texts, names)}
+        want = {r['pattern'] for r in d['schematic']['refs']}
+        assert got == want, d['drawing_number']
+    refs = cable_focus.drawing_refs([t['text'] for t in cable_preview.render_base_svg(_dxf_bytes('EE6892-600-01A')).texts], names)
+    assert {r['pattern']: r['matches'] for r in refs}['-405-08'] == ['EE6892-405-08A']

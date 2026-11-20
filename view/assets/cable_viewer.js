@@ -110,7 +110,7 @@ export default function(component) {
     });
     S.svg.querySelector('#cv-hl').textContent = rules.join('\n');
     // 図形（線・記号・端末）の重ね書き。色の太線を元の白い図面の下に敷く（白い線と色付きの文字は隠れない）
-    const PATH_STYLE = 'fill:none;stroke-width:6px;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round;opacity:.85;pointer-events:none';
+    const PATH_STYLE = 'fill:none;stroke-width:4px;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round;opacity:.7;pointer-events:none';
     S.ov.innerHTML = (d.shapes || []).map((s) => '<path d="' + s.d + '" style="' + PATH_STYLE + '" stroke="' + s.color + '"/>').join('');
     S.ov.style.display = S.ovOn ? '' : 'none';
     S.apply();

@@ -735,6 +735,37 @@ def terminal_at(g, rects, E, wire_dir, narrow=()):
     return {'rect': r, 'pin': pin, 'connector': name, 'kind': 'box', 'name_pt': name_pt, 'pin_t': pin_t, 'name_t': name_t}
 
 
+TERMINAL_CIRCLE_MAX = 4.2   # 端子円の直径の上限（コネクタの円は直径 3.98 のものがある）
+TERMINAL_CIRCLE_MIN = 1.9   # 芯線の途中で止める端子円の直径の下限（接続点の黒丸 0.5〜1.0 は除く）
+
+
+def clip_at_terminal_circle(g, E, side, horiz, box, tol=0.3):
+    """芯線の端 E より手前（ケーブル記号 box の側）に、線の上に載った端子円があれば、その円の縁（記号に向いた側）を端として返す。無ければ E。
+
+    コネクタの円が、記号から端子台まで通る1本の長い線の途中に載る図がある（EE6888-604-01A の M74006: CNHV- の円から CNHVA- の円までが
+    HV- から TB1 まで続く1本の線の一部）。線の端まで進むと、ケーブルの端末ではなく先の端子台（TB1）を拾うので、記号から外へ向かって
+    最初に出会う端子円で止める。side は '-'（記号の左／下）か '+'（右／上）、horiz は芯線が横向きか。"""
+    x0, y0, x1, y1 = box
+    along = 0 if horiz else 1                 # 芯線に沿う軸
+    lo, hi = (x0, x1) if horiz else (y0, y1)
+    found = []
+    for c in g.curves:
+        d = c.size[0]
+        if c.kind != 'CIRCLE' or not (TERMINAL_CIRCLE_MIN <= d <= TERMINAL_CIRCLE_MAX):
+            continue
+        if abs(c.center[1 - along] - E[1 - along]) > tol:
+            continue
+        a = c.center[along]
+        if side == '-' and E[along] - tol <= a < lo:
+            found.append((-a, a + d / 2))
+        elif side == '+' and hi < a <= E[along] + tol:
+            found.append((a, a - d / 2))
+    if not found:
+        return E
+    edge = min(found)[1]
+    return (edge, E[1]) if horiz else (E[0], edge)
+
+
 def circle_terminal(g, E):
     """芯線の端が小さな円（端子台の端子・ブレーカーの極）に触れるとき、端子番号と機器名。
 
@@ -743,7 +774,7 @@ def circle_terminal(g, E):
     """
     circ = None
     for c in g.curves:
-        if c.kind == 'CIRCLE' and c.size[0] <= 3.2:
+        if c.kind == 'CIRCLE' and c.size[0] <= TERMINAL_CIRCLE_MAX:
             r = c.size[0] / 2
             if abs(math.dist(E, c.center) - r) < 0.3 or math.dist(E, c.center) < r:
                 circ = c
@@ -754,7 +785,7 @@ def circle_terminal(g, E):
     near = [t for t in g.txts if len(t.s) <= 3 and math.dist((t.cx, t.cy), (cx, cy)) < 4]
     pin_t = min(near, key=lambda t: math.dist((t.cx, t.cy), (cx, cy))) if near else None
     pin = pin_t.s if pin_t else None
-    col = [c for c in g.curves if c.kind == 'CIRCLE' and abs(c.center[0] - cx) < 0.15 and c.size[0] <= 3.2]
+    col = [c for c in g.curves if c.kind == 'CIRCLE' and abs(c.center[0] - cx) < 0.15 and c.size[0] <= TERMINAL_CIRCLE_MAX]
     col.sort(key=lambda c: c.center[1])
     top = circ
     for c in col:                       # 上へ間隔 7 以内で続く円
@@ -1119,6 +1150,8 @@ def analyze_schematic(path, name):
                 for E, _reason, path_ in trace_wire(g, grid, k):
                     path_all += [j for j in path_ if j not in path_all]
                     side = '-' if ((E[0] - center[0]) if horiz else (E[1] - center[1])) < 0 else '+'
+                    if box:
+                        E = clip_at_terminal_circle(g, E, side, horiz, box)
                     term = terminal_at(g, rects, E, g.segs[path_[-1]].dir(), narrow)   # 曲がった芯線は端の線分の向き
                     ends[side] = _end_info(g, grid, device_rects, regions, E, term, inner_point(term, E, g.segs[path_[-1]].dir()))
                 wl = wire_label_texts(g, k, box)

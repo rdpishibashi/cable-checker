@@ -223,6 +223,58 @@ def test_wide_label_box_along_the_wire_is_not_a_terminal(tmp_path):
     assert end['name'] != 'CM12'
 
 
+# ---------------------------------------------------------------- コネクタの円（端子円）
+
+def build_circles(tmp_path, through=False, dots_only=False, d=3.98, name='EE0000-405-01A'):
+    """左右が円のコネクタ（直径 d。名前 CN1・CN2 を円の上に置く）で、中央にケーブル記号（楕円）がある図面。芯線は1本（y=8）。
+    through=False: 芯線は円の縁から縁まで。through=True: 1本の長い線（x=-20〜90）が円の中心を通り抜ける（円は線の途中に載る）。
+    dots_only=True: 大きなコネクタ円の代わりに、線の途中に接続点の小さな黒丸（直径 1）だけを置く。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    left, right = (0.0, 60.0)
+    r = d / 2
+    for x, label in ((left, 'CN1'), (right, 'CN2')):
+        msp.add_circle((x, 8), 0.5 if dots_only else r, dxfattribs={'color': 4})
+        if not dots_only:
+            _text(msp, label, x, 11)
+    a, b = (-20, 90) if through else (left + r, right - r)
+    _line(msp, (a, 8), (b, 8))
+    _text(msp, 'P021', 20, 8.5, ap=7)
+    msp.add_ellipse((30, 5.5, 0), major_axis=(0, 4.5, 0), ratio=0.3, dxfattribs={'color': 2})
+    _arrow(msp, (30, 10), 19.5)
+    _text(msp, f'W No.{CABLE}', 22, 19.5, ap=7)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def _ends_of(result):
+    (wire,) = [w for w in occurrence(result)['wires'] if w['labels'] == ['P021']]
+    return {s: (e['kind'], e['name']) for s, e in wire['ends'].items()}
+
+
+def test_connector_circle_wider_than_3_2_is_a_terminal(tmp_path):
+    """守るもの: コネクタの円は直径 3.98 のものがある（端子円の判定の上限は 4.2）。以前は 3.2 までで、芯線が円の縁に着いていても端末が読めず、
+    先の長い線の端（TB1）だけが端末になった（EE6888-604-01A の M74003〜M74005）。"""
+    assert _ends_of(read(build_circles(tmp_path))) == {'-': ('circle', 'CN1'), '+': ('circle', 'CN2')}
+
+
+def test_circle_larger_than_the_terminal_limit_is_not_a_terminal(tmp_path):
+    """守るもの: 上限（4.2）を超える円は端子にしない（円の大きさの上限が効いている）。"""
+    assert _ends_of(read(build_circles(tmp_path, d=5.0))) == {'-': (None, None), '+': (None, None)}
+
+
+def test_through_line_stops_at_the_first_terminal_circle_on_it(tmp_path):
+    """守るもの: コネクタの円が、記号から先まで通る1本の長い線の途中に載る図では、記号から外へ最初に出会う端子円で止める（線の端まで進んで
+    先の端子台を拾わない。EE6888-604-01A の M74006: CNHV- の円から CNHVA- の円までが HV- から TB1 まで続く1本の線の一部）。"""
+    assert _ends_of(read(build_circles(tmp_path, through=True))) == {'-': ('circle', 'CN1'), '+': ('circle', 'CN2')}
+
+
+def test_small_junction_dots_on_a_through_line_do_not_stop_the_wire(tmp_path):
+    """守るもの: 線の途中の接続点の黒丸（直径 1）は端子円ではないので、そこでは止めない（下限 1.9）。端は線の端のまま（端末なし）。"""
+    assert _ends_of(read(build_circles(tmp_path, through=True, dots_only=True))) == {'-': (None, None), '+': (None, None)}
+
+
 # ---------------------------------------------------------------- ユニットの根拠
 
 def test_region_name_candidates_of_every_candidate_are_collected_for_the_end(tmp_path, monkeypatch):

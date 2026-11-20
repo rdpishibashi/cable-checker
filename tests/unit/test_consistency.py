@@ -801,3 +801,32 @@ def test_run_check_adds_extracts_and_the_cable_comparison_to_the_result(monkeypa
 def test_symbol_severity_order_is_x_then_unread_then_weak_then_ok_then_na():
     ordered = sorted(C.SYMBOLS, key=lambda s: C.SEVERITY[s], reverse=True)
     assert ordered == [NG, UNREAD, WEAK, OK, NA]
+
+
+def _marked(drawings):
+    res, row = run(drawings)
+    return res, row, {(m['drawing'], m['text']): m['symbol'] for m in row['marks']}
+
+
+def test_marks_follow_each_comparison_symbol_and_wrong_values_turn_the_text_cross():
+    """守るもの: 行の `marks`（viewer の強調）は、その文字を比べた比較の記号を持つ。一覧表の文字は項目のセルの記号、線番設定表の選んだ行の
+    接続先は端末のユニット・機器符号の比較の記号。機器符号を食い違わせると、一覧表の文字と線番設定表の接続先が × になる（照合の記号と一致）。
+    `focus` は一覧表・製作図・線番設定表の図番と選んだ行を持つ。"""
+    ds = build()
+    by_name(ds, LIST_NAME)['list_rows'][0]['_refs'] = {'ケーブル番号': [(CABLE, (1.0, 1.0))], '端末1_機器符号': [('TBR1B', (2.0, 2.0))],
+                                                       'ケーブル備考': [('備考', (3.0, 3.0))]}
+    by_name(ds, WIRE_NAME)['wire_rows'][0]['_refs'] = {'ケーブル番号': [(CABLE, (4.0, 4.0))], '接続先1': [('RACK\nTBR1B', (5.0, 5.0))]}
+    _res, row, marks = _marked(ds)
+    assert marks[(LIST_NAME, CABLE)] == OK and marks[(LIST_NAME, 'TBR1B')] == OK
+    assert (LIST_NAME, '備考') not in marks                              # 項目に対応しない列は marks に無い（cable_focus が「関連」にする）
+    assert marks[(WIRE_NAME, CABLE)] == OK and marks[(WIRE_NAME, 'RACK\nTBR1B')] == OK
+    assert row['focus']['list'] == LIST_NAME and row['focus']['fabs'] == [FAB_NAME] and row['focus']['wires'] == [WIRE_NAME]
+    assert row['focus']['sel'] == [(WIRE_NAME, 1, 1)] and row['focus']['schematic'] == ''
+
+    ds = build()
+    by_name(ds, LIST_NAME)['list_rows'][0]['端末1_機器符号'] = 'TBF9Z'
+    by_name(ds, LIST_NAME)['list_rows'][0]['_refs'] = {'端末1_機器符号': [('TBF9Z', (2.0, 2.0))]}
+    by_name(ds, WIRE_NAME)['wire_rows'][0]['_refs'] = {'接続先1': [('RACK\nTBR1B', (5.0, 5.0))]}
+    _res, row, marks = _marked(ds)
+    assert row['cells'][item_column('端末1', '機器符号')] == NG
+    assert marks[(LIST_NAME, 'TBF9Z')] == NG and marks[(WIRE_NAME, 'RACK\nTBR1B')] == NG

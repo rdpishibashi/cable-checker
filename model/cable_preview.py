@@ -264,7 +264,7 @@ def _squash(s: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize('NFKC', s or '')).upper()
 
 
-def apply_marks(base: BaseRender, marks) -> Tuple[list, dict, int]:
+def apply_marks(base: BaseRender, marks, cable: Optional[str] = None) -> Tuple[list, dict, int]:
     """マーク（[{'anchor': (x, y), 'text': 文字, 'symbol': 記号|'関連'}]）を、描画した文字のクラスに対応づける。
 
     突き合わせは基準点（`text_anchor`）。同じ基準点に文字が複数あるときだけ文字列（空白除去・大文字）で絞る。
@@ -289,6 +289,10 @@ def apply_marks(base: BaseRender, marks) -> Tuple[list, dict, int]:
             cur = best.get(id(t))
             if cur is None or _SYMBOL_RANK[m['symbol']] < _SYMBOL_RANK[cur]:
                 best[id(t)] = m['symbol']
+    if cable:   # 選んだケーブル番号を含む文字は、ほかに記号が無ければ「関連」
+        for t in base.texts:
+            if any(c['cable'] == cable for c in find_cables([t['text']])):
+                best.setdefault(id(t), RELATED)
     items, counts = [], {}
     for t in base.texts:
         sym = best.get(id(t))
@@ -299,11 +303,11 @@ def apply_marks(base: BaseRender, marks) -> Tuple[list, dict, int]:
     return items, counts, missing
 
 
-def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None) -> dict:
+def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None, cable=None) -> dict:
     """viewer 部品に渡す data（JSON 化できる dict）を作る。
 
     marks が None: ケーブル番号を含む文字を赤にする（選んだケーブルが無いとき）。
-    marks あり: マークの記号の色で文字を塗る（`apply_marks`）。他の文字は白。
+    marks あり: マークの記号の色で文字を塗る（`apply_marks`。cable を含む文字は記号が無ければ「関連」）。他の文字は白。
     items: 色を変える文字の CSS クラス [[クラス名, 'fill'|'stroke', 色], ...]／legend: 凡例 [[ラベル, 色, 件数], ...]／
     count: 色を変えた文字の数／missing: 突き合わせできなかったマークの数／counts: 記号ごとの件数（見出しに使う）。"""
     if marks is None:
@@ -312,7 +316,7 @@ def build_viewer_data(base: BaseRender, fname: str, marks=None, title=None) -> d
         legend = [['ケーブル番号', CABLE_COLOR, count]]
         counts, missing = {}, 0
     else:
-        items, counts, missing = apply_marks(base, marks)
+        items, counts, missing = apply_marks(base, marks, cable)
         count = sum(counts.values())
         legend = [[SYMBOL_LABELS[sym], SYMBOL_TEXT_COLORS[sym], counts[sym]] for sym in _SYMBOL_ORDER if sym in counts]
     return {

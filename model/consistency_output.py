@@ -12,11 +12,12 @@ import io
 
 import pandas as pd
 
-from . import cable_list_table
+from . import cable_list_table, cable_preview, legend
 from .compare_output import (ALL_SHEET, compare_frame, count_rows, group_sheet_names, status_formats,
                              write_compare_sheet)
 from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, NG, OK, SEP, SET_393,
                           SET_405, SYMBOLS, UNREAD, WEAK, _codes, _values, fab_text_rows, pattern_resolutions)
+from .consistency import _Ctx, _chain, _schematic_names
 from .excel_output import display_width
 from .wire_number_table import split_unit_terminal
 
@@ -27,6 +28,9 @@ CHECK_SHEET = '整合性チェック'
 DETAIL_SHEET = '照合明細'
 WIRE_CHECK_SHEET = '芯線照合'
 INDEX_SHEET = '図面一覧'
+LEGEND_SHEET = '記号の説明'
+RELATION_SHEET = '図面の関係'
+RELATION_COLUMNS = ['展開接続図', 'ケーブル一覧表', '線番設定表', 'ケーブル製作図']
 EXTRACT_SHEET = 'ケーブル抽出'
 LIST_SHEET = 'ケーブル一覧表'
 WIRE_SHEET = '線番設定表'
@@ -35,7 +39,7 @@ SCHEMATIC_SHEET = '展開接続図'
 PATTERN_SHEET = '図番パターン照合'
 TEXT_SHEET = '製作図の文字'
 # 固定のシート（並び順）。`All Diff` と `<グループ名> Diff` は `ケーブル抽出` の後ろ、`整合性チェック` の前に入る
-FIXED_SHEET_NAMES = [SUMMARY_SHEET, INDEX_SHEET, EXTRACT_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, SCHEMATIC_SHEET,
+FIXED_SHEET_NAMES = [SUMMARY_SHEET, LEGEND_SHEET, INDEX_SHEET, RELATION_SHEET, EXTRACT_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, SCHEMATIC_SHEET,
                      LIST_SHEET, WIRE_SHEET, CONN_SHEET, TEXT_SHEET, PATTERN_SHEET]
 SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル製作図（393）'}
 INDEX_COLUMNS = ['セット', '図番', 'タイトル', 'サブタイトル', '図面の種類', 'ケーブル数', '備考']
@@ -112,6 +116,36 @@ def summary_frame(result):
     rows += [[name, *[None] * len(SYMBOLS), n] for name, n in kinds]
     # 図面の種類の行は記号の列が空欄（None）。数値と空文字が混ざる object 列にすると Arrow に変換できないので整数型にそろえる
     return pd.DataFrame(rows, columns=SUMMARY_COLUMNS).astype({c: 'Int64' for c in SUMMARY_COLUMNS[1:]})
+
+
+def legend_frame(result=None):
+    """記号の説明（記号の意味と色・項目ごとの判定条件・判断根拠の語）。結果に依らない固定の表。"""
+    return pd.DataFrame(legend.legend_rows(), columns=legend.COLUMNS)
+
+
+def relation_frame(result):
+    """図面の関係。アップロードした展開接続図（405。図番順）ごとに、関連する ケーブル一覧表・線番設定表・ケーブル製作図 の図番を `、` 区切りで並べる。
+
+    関連は照合と同じチェーン: 一覧表の行の接続図パターンが当たった展開接続図 → その行の製作図パターンが当たった製作図 →
+    製作図の注記の線番設定表パターンが当たった線番設定表。関連が無ければ空欄。"""
+    ctx = _Ctx(result['drawings'])
+    related = {}
+    for d in result['drawings']:
+        for row in d['list_rows']:
+            names = _schematic_names(ctx, _values(row.get('接続図パターン')))
+            if not names:
+                continue
+            ch = _chain(row, ctx.by_name_393)
+            for name in names:
+                rel = related.setdefault(name, [set(), set(), set()])
+                rel[0].add(d['drawing_number'])
+                rel[1].update(w['drawing_number'] for w in ch['wires'] if ch['wire_ok'])
+                rel[2].update(f['drawing_number'] for f in ch['fabs'] if ch['fab_ok'])
+    rows = []
+    for name in sorted(d['drawing_number'] for d in result['drawings'] if d['set'] == SET_405):
+        lists, wires, fabs = (sorted(x) for x in related.get(name, [set(), set(), set()]))
+        rows.append([name, '、'.join(lists), '、'.join(wires), '、'.join(fabs)])
+    return pd.DataFrame(rows, columns=RELATION_COLUMNS)
 
 
 def check_frame(result):
@@ -238,7 +272,7 @@ def sheet_plan(result):
     """
     compare = result['compare']
     group_names = group_sheet_names([g['name'] for g in compare['groups']], reserved=FIXED_SHEET_NAMES)
-    frames = {SUMMARY_SHEET: summary_frame, CHECK_SHEET: check_frame, DETAIL_SHEET: detail_frame,
+    frames = {SUMMARY_SHEET: summary_frame, LEGEND_SHEET: legend_frame, RELATION_SHEET: relation_frame, CHECK_SHEET: check_frame, DETAIL_SHEET: detail_frame,
               WIRE_CHECK_SHEET: wire_check_frame, INDEX_SHEET: index_frame, EXTRACT_SHEET: extract_frame,
               LIST_SHEET: list_frame, WIRE_SHEET: wire_frame, CONN_SHEET: conn_frame, SCHEMATIC_SHEET: schematic_frame,
               PATTERN_SHEET: pattern_frame, TEXT_SHEET: text_frame}
@@ -268,6 +302,8 @@ def build_workbook(result):
         sym_fmts[NA] = book.add_format({'align': 'center'})
         row_fmts = {s: book.add_format({'bg_color': bg, 'font_color': fg}) for s, (bg, fg) in SYMBOL_COLORS.items()}
         compare_fmts = status_formats(book)
+        viewer_fmts = {k: book.add_format({'bg_color': c, 'font_color': '#000000', 'align': 'center'})
+                       for k, c in cable_preview.SYMBOL_TEXT_COLORS.items()}
         for name, frame, compare_rows in sheet_plan(result):
             if name == CHECK_SHEET:
                 _write_check_sheet(writer, result, frame, header_fmt, sym_fmts)
@@ -287,6 +323,13 @@ def build_workbook(result):
                     fmt = row_fmts.get(values[judge_col])
                     for col, value in enumerate(values):
                         ws.write(i, col, None if pd.isna(value) else value, fmt)   # 欠損は空欄（書式だけ付ける）
+            elif name == LEGEND_SHEET:
+                sym_col = list(frame.columns).index('記号・語')
+                viewer_col = list(frame.columns).index('viewer の文字色')
+                for i, values in enumerate(frame.values.tolist(), start=1):
+                    if values[0] == '記号' and values[sym_col] in sym_fmts:
+                        ws.write(i, sym_col, values[sym_col], sym_fmts[values[sym_col]])
+                        ws.write(i, viewer_col, values[viewer_col], viewer_fmts[values[sym_col]])
             elif name == WIRE_CHECK_SHEET:
                 cols = [list(frame.columns).index(c) for c in ('判定（PIN）', '判定（線番）', '判定（色）')]
                 for i, values in enumerate(frame.values.tolist(), start=1):

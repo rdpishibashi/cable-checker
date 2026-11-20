@@ -7,6 +7,7 @@
 """
 import io
 import os
+import re
 
 import ezdxf
 import openpyxl
@@ -150,7 +151,7 @@ def test_405_set_alone_runs_extraction_and_comparison(tmp_path):
     run_check_click(at)
     assert not at.error
     sheets = at.selectbox(key='preview_sheet_check')
-    assert sheets.options[:5] == ['Summary', '図面一覧', 'ケーブル抽出', 'All Diff', '整合性チェック']
+    assert sheets.options[:7] == ['Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', '整合性チェック']
     assert any('展開接続図 1 図面・ケーブル製作図 0 図面' in v and 'ケーブル番号 2 件（両方 0・展開接続図だけ 2・ケーブル製作図だけ 0）' in v
                and '一覧表の行 0 行' in v for v in values(at.caption))
     sheets.select('All Diff').run()
@@ -246,7 +247,7 @@ def test_downloaded_excel_has_the_same_sheets_as_the_preview(tmp_path):
     assert [b.proto.label for b in at.download_button] == ['分析結果ダウンロード']
     book = openpyxl.load_workbook(io.BytesIO(at.session_state['check_result']['xlsx']))
     assert book.sheetnames == at.selectbox(key='preview_sheet_check').options
-    assert book.sheetnames[1:5] == ['図面一覧', 'ケーブル抽出', 'All Diff', '（タイトルなし） Diff']
+    assert book.sheetnames[1:7] == ['記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', '（タイトルなし） Diff']
 
 
 # ---------------------------------------------------------------- プレビュー
@@ -284,27 +285,39 @@ def mounted(monkeypatch):
     return calls
 
 
-def test_viewer_toggle_shows_the_uploaded_drawings_of_both_sets(tmp_path, mounted):
-    """守るもの: 図面の viewer は分析結果プレビューの「図面を表示」トグル（既定 OFF）から出る。選べる図面はアップロードした 405 → 393
-    （それぞれ図番順）で、ケーブル番号の赤字の件数つきで出る。シートの選択とは独立（どのシートでも出せる）。"""
+SECTION = 'drawing_section_check'
+
+
+def open_section(at, key=SECTION):
+    at.session_state[key] = True
+    at.run()
+    assert not at.exception
+    return at
+
+
+def expander_labels(at):
+    return [e.proto.label for e in at.expander]
+
+
+def test_drawing_section_is_separate_from_the_preview_and_lists_the_drawings_of_both_sets(tmp_path, mounted):
+    """守るもの: 図面の viewer は分析結果プレビューの外の「図面の確認」（初回は閉じる）に出る。プレビューに「図面を表示」トグルは無い。
+    選べる図面はアップロードした 405 → 393（それぞれ図番順）。選んだ図面は種別のタイトル付きの開閉枠（既定で開く）に出る。"""
     data = dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61', 'MC121A1'])
     files_405, files_393 = both_sets(tmp_path)
     at = run_app(files_405 + [('EE0001-405-01A.dxf', data)], files_393)
     run_check_click(at)
-    assert [t.label for t in at.toggle] == ['図面を表示'] and mounted == []
-    at.toggle(key='preview_viewer_check').set_value(True).run()
-    assert not at.exception and not at.warning
-    box = at.selectbox(key='preview_drawing_check')
+    assert not at.toggle and mounted == []
+    assert [x for x in expander_labels(at) if x in ('分析結果プレビュー', '図面の確認')] == ['分析結果プレビュー', '図面の確認']
+    open_section(at)
+    assert not at.warning
+    box = at.selectbox(key='drawing_select_check')
     assert box.options == ['EE0001-405-01A（405）', 'EE1234-405-01A（405）', 'EE5555-999-09A（405）', 'EE6892-365-61C（393）']
-    assert mounted[-1]['data']['fname'] == 'EE0001-405-01A.dxf' and mounted[-1]['data']['count'] == 2
+    assert expander_labels(at)[-1] == '展開接続図 EE0001-405-01A'
+    assert mounted[-1]['data']['fname'] == 'EE0001-405-01A.dxf' and mounted[-1]['data']['count'] == 2 and not mounted[-1]['data']['marked']
     box.select('EE6892-365-61C（393）').run()
     assert mounted[-1]['data']['fname'] == 'EE6892-365-61C.dxf'
-    assert at.session_state['preview_expanded_check'] is True
-    at.selectbox(key='preview_sheet_check').select('図面一覧').run()
-    assert mounted[-1]['data']['fname'] == 'EE6892-365-61C.dxf' and at.toggle(key='preview_viewer_check').value is True
-    n = len(mounted)
-    at.toggle(key='preview_viewer_check').set_value(False).run()
-    assert len(mounted) == n                                # OFF にした後は描き直されない
+    assert expander_labels(at)[-1] == 'ケーブル製作図 EE6892-365-61C'
+    assert not at.selectbox(key='drawing_select_check').value.endswith('（405）') and len(at.selectbox) == 2   # 393 ではケーブルの選択欄が無い
 
 
 def test_viewer_shows_warning_when_drawing_cannot_be_rendered_and_keeps_page(tmp_path, monkeypatch):
@@ -316,20 +329,71 @@ def test_viewer_shows_warning_when_drawing_cannot_be_rendered_and_keeps_page(tmp
     monkeypatch.setattr(cable_viewer, 'render_base', boom)
     at = run_app(*both_sets(tmp_path))
     run_check_click(at)
-    at.toggle(key='preview_viewer_check').set_value(True).run()
-    assert not at.exception
+    open_section(at)
     assert any('EE1234-405-01A.dxf を表示できませんでした' in w.value for w in at.warning)
     assert at.download_button[0].proto.label == '分析結果ダウンロード' and at.dataframe
 
 
-def test_viewer_selection_returns_to_the_first_drawing_when_the_uploads_change(tmp_path, mounted):
+def test_drawing_selection_returns_to_the_first_drawing_when_the_uploads_change(tmp_path, mounted):
     """守るもの: 入力を差し替えて前回選んだ図面が無くなったら、先頭の図面に戻る（選択肢外の値でずれない）。"""
     at = run_app(*both_sets(tmp_path))
     run_check_click(at)
-    at.toggle(key='preview_viewer_check').set_value(True).run()
-    at.selectbox(key='preview_drawing_check').select('EE6892-365-61C（393）').run()
+    open_section(at)
+    at.selectbox(key='drawing_select_check').select('EE6892-365-61C（393）').run()
     at.file_uploader(key=U393).upload('EE7777-777-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))
     at.run()
     run_check_click(at)
-    at.toggle(key='preview_viewer_check').set_value(True).run()
-    assert at.selectbox(key='preview_drawing_check').value == 'EE1234-405-01A（405）'
+    open_section(at)
+    assert at.selectbox(key='drawing_select_check').value == 'EE1234-405-01A（405）'
+
+
+def test_selecting_a_cable_lists_the_related_drawings_in_collapsible_windows_with_counts(tmp_path, mounted):
+    """守るもの: 展開接続図でケーブルを選ぶと、関連する図面（一覧表）が種別のタイトル付きの開閉枠で並ぶ。見出しに ×？△○ の件数が付く。
+    開いている枠だけ描画され、マークの記号の色で強調する（marked）。閉じた枠は描画しない。"""
+    at = run_app(*both_sets(tmp_path))
+    run_check_click(at)
+    open_section(at)
+    cables = at.selectbox(key='drawing_cable_check')
+    assert cables.options[0] == '（選択しない）' and 'M65206' in cables.options
+    n = len(mounted)
+    cables.select('M65206').run()
+    labels = [x for x in expander_labels(at) if x.startswith(('展開接続図', 'ケーブル一覧表', '線番設定表', 'ケーブル製作図'))]
+    assert labels[0].startswith('展開接続図 EE1234-405-01A　×') and any(x.startswith('ケーブル一覧表 EE6892-365-61C　×') for x in labels)
+    assert all(re.search(r'×\d+ ？\d+ △\d+ ○\d+$', x) for x in labels)
+    opened = mounted[n:]
+    assert [m['data']['fname'] for m in opened] == ['EE1234-405-01A.dxf'] and opened[0]['data']['marked']   # 開いているのは選んだ図面だけ
+    at.session_state['drawing_exp_check_ケーブル一覧表_EE6892-365-61C_M65206'] = True
+    at.run()
+    assert mounted[-1]['data']['fname'] == 'EE6892-365-61C.dxf' and mounted[-1]['data']['marked']
+    assert mounted[-1]['data']['legend'] and mounted[-1]['data']['count'] > 0
+
+
+def schematic_with_reference_bytes(tmp_path, text='to POWER LINE (-405-08)'):
+    return dxf_bytes(tmp_path, ['W No.M39001', text])
+
+
+def test_related_drawings_listed_from_references_and_opened_in_collapsible_windows(tmp_path, mounted):
+    """守るもの: 展開接続図の図中の参照 `(-xxx-xx)` を「関連図面」として一覧する。アップロード（405・393）に一致する図面は開閉枠（既定で閉じる）で
+    表示でき、無ければ「アップロードに無い」。Excel の図番パターン照合は変えない。"""
+    other = dxf_bytes(tmp_path, ['EE6892-405-08A'])
+    at = run_app([('EE6892-405-01A.dxf', schematic_with_reference_bytes(tmp_path, 'to POWER LINE (-405-08) XRLS1 (-405-09)')),
+                  ('EE6892-405-08A.dxf', other)], [])
+    run_check_click(at)
+    open_section(at)
+    text = '\n'.join(values(at.markdown))
+    assert '`-405-08`' in text and '→ EE6892-405-08A' in text and '`-405-09`' in text and '→ アップロードに無い' in text
+    n = len(mounted)
+    assert 'EE6892-405-08A' not in [m['data']['fname'][:-4] for m in mounted[n:]]
+    label = '関連図面 -405-08　EE6892-405-08A'
+    assert label in expander_labels(at) and not any('-405-09　' in x for x in expander_labels(at))
+    at.session_state['drawing_exp_check_ref-405-08_EE6892-405-08A_（選択しない）'] = True
+    at.run()
+    assert mounted[-1]['data']['fname'] == 'EE6892-405-08A.dxf'
+
+
+def test_no_related_drawings_message_when_the_schematic_has_no_reference(tmp_path, mounted):
+    """守るもの: 図中の参照が無い展開接続図では「関連図面はありません」と出る。"""
+    at = run_app([('EE6892-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))], [])
+    run_check_click(at)
+    open_section(at)
+    assert any('関連図面（図中の参照' in c.value and 'ありません' in c.value for c in at.caption)

@@ -100,7 +100,7 @@ _DRAIN = {'SG', 'SH'}
 def _empty_drawing(name, no_text=False, drawing_set=SET_393):
     return {'drawing_number': name, 'set': drawing_set, 'no_text': no_text, 'kinds': [], 'list_rows': [], 'wire_rows': [],
             'wire_notes': [], 'fab_wire_numbers': set(), 'fab_notes': [], 'fab_texts': [], 'fab_text': '',
-            'fab_conns': [], 'schematic': None}
+            'fab_conns': [], 'fab_text_refs': [], 'schematic': None}
 
 
 def analyze_drawing(path, name):
@@ -125,7 +125,7 @@ def analyze_drawing(path, name):
     wire_rows = []
     for ti, table in enumerate(wire['tables'], 1):
         for r in table['rows']:
-            row = {'表': ti, '行': r['_row'], '_lines': r['_lines'],
+            row = {'表': ti, '行': r['_row'], '_lines': r['_lines'], '_refs': r.get('_refs', {}),
                    '削除された値': '; '.join(f'{k}:{v}' for k, v in r['_deleted'].items())}
             row.update({k: v for k, v in r.items() if not k.startswith('_')})
             wire_rows.append(row)
@@ -155,6 +155,7 @@ def analyze_drawing(path, name):
         'fab_notes': [p for p, _ in fab['notes']],
         'fab_texts': fab['texts'],
         'fab_text': _squash(' '.join(fab['texts'])),
+        'fab_text_refs': fab['text_refs'],
         'fab_conns': fab_drawing.connection_rows(fab),
         'schematic': None,          # 2段目（analyze_uploads）が展開接続図として読んだときだけ入る
     }
@@ -834,7 +835,7 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
     if comparable:
         for w in pick['occ']['wires']:
             p = {s: ((w['ends'].get(s) or {}).get('pin') or '') for s in '-+'}
-            wires.append({'pins': p, 'pool': Counter(x for x in p.values() if x), 'labels': w['labels']})
+            wires.append({'pins': p, 'pool': Counter(x for x in p.values() if x), 'labels': w['labels'], 'src': w})
             for x in w['labels'][:2]:
                 labels405['color' if _is_color(x) else 'number'].add(_squash(x))
         out['pin_unread'] = not any(w['pool'] for w in wires)
@@ -1039,6 +1040,121 @@ def _correspondence_cells(ctx, row, ch, list_name, pick):
     return {'一覧表': [list_cell], '製作図': [fab_cell], '線番設定表': [w_fig, w_row, w_note], '展開接続図': [sch_cell]}
 
 
+# ---------------------------------------------------------------- viewer の強調（文字の位置と記号）
+
+def _cmp(cells, col, kind):
+    """項目 col のセルのうち、図面の種別 kind の比較の記号（複数なら重いほう）。無ければ None。"""
+    syms = [s for c in cells[col] for k, s, _ in c.comparisons if k == kind]
+    return _worst(syms) if syms else None
+
+
+def _combine(*syms):
+    syms = [s for s in syms if s]
+    return _worst(syms) if syms else NA
+
+
+def _marks_of(drawing, refs, symbol, item):
+    return [{'drawing': drawing, 'anchor': ref, 'text': text, 'symbol': symbol, 'item': item}
+            for text, ref in refs or [] if ref is not None]
+
+
+def _row_marks(ctx, list_name, row, cells, ch, sel, pick, mat, multi, fab_conns):
+    """一覧表の1行の照合結果に対応する、図面上の文字の強調（viewer 用）。
+
+    [{'drawing': 図番, 'anchor': 文字の基準点, 'text': 文字, 'symbol': 記号, 'item': 項目}]。照合の記号・根拠は変えない。
+    記号は、その文字を比べた比較（図面の種別ごと）の記号。比べていない文字は含めない（cable_focus が「関連」にする）。"""
+    out = []
+    col = item_column
+    sym_of = lambda *cols: _worst([c.symbol for k in cols for c in cells[k]]) if cols else NA  # noqa: E731
+    # --- 一覧表: セルごとの記号（最も重い比較）
+    refs = row.get('_refs', {})
+    list_map = [(('図面の対応', '一覧表'), ['ケーブル番号']), (('図面の対応', '製作図'), ['製作図パターン']),
+                (('図面の対応', '展開接続図'), ['接続図パターン']), (('ケーブル', '種類'), ['ケーブル種類']), (('ケーブル', '芯数'), ['芯数'])]
+    for i in (1, 2):
+        list_map += [((f'端末{i}', n), [f'端末{i}_{n}']) for n in ('ユニット', 'モジュール', '機器符号', '部品種別')]
+    for (g, n), fields in list_map:
+        for f in fields:
+            out += _marks_of(list_name, refs.get(f), sym_of(col(g, n)), f'{g}｜{n}')
+    # --- 線番設定表（選んだ行）
+    num_wire = _cmp(cells, col('芯線', '線番'), '線番設定表')
+    for x in sel:
+        dn, wrefs = x['drawing']['drawing_number'], x['row'].get('_refs', {})
+        out += _marks_of(dn, wrefs.get('ケーブル番号'), _combine(_cmp(cells, col('図面の対応', '線番設定表'), '線番設定表')), '図面の対応｜線番設定表')
+        for i in (1, 2):
+            sym = _combine(*(_cmp(cells, col(f'端末{i}', n), '線番設定表') for n in ('ユニット', 'モジュール', '機器符号')))
+            out += _marks_of(dn, wrefs.get(f'接続先{_side(x["orient"], i) + 1}'), sym, f'端末{i}｜接続先')
+        sym = _combine(_cmp(cells, col('ケーブル', '芯数'), '線番設定表'), num_wire)
+        for k in x['row']:
+            if re.fullmatch(r'線番\d+', k) and x['row'][k]:
+                out += _marks_of(dn, wrefs.get(k), sym, '芯線｜線番')
+    # --- ケーブル製作図
+    for j, (d, c) in enumerate(fab_conns):
+        r = mat['rows'][j] if j < len(mat['rows']) else None
+        dn = d['drawing_number']
+        pin_sym = r['判定_PIN'] if r else NA
+        num_sym = _combine(r['判定_線番'] if r and r['判定_線番'] != NA else None, num_wire)
+        for k in (1, 2):
+            r_refs = c.get(f'_端{k}_refs', {})
+            out += _marks_of(dn, r_refs.get('PIN'), pin_sym, '芯線｜PIN')
+            out += _marks_of(dn, r_refs.get('線番'), num_sym, '芯線｜線番')
+        for text, ref in c.get('_label_refs', []):
+            out += _marks_of(dn, [(text, ref)], (r['判定_色'] if r and _is_color(text) else NA), '芯線｜色')
+    for d in ch['fabs']:
+        dn = d['drawing_number']
+        for g, n, field in (('端末1', '部品種別', '端末1_部品種別'), ('端末2', '部品種別', '端末2_部品種別'), ('ケーブル', '種類', 'ケーブル種類')):
+            sym = _cmp(cells, col(g, n), '製作図')
+            if sym is None:
+                continue
+            for v in _values(row.get(field)):
+                key = _squash(v)
+                out += _marks_of(dn, [(t, ref) for t, ref in d.get('fab_text_refs', []) if key and key in _squash(t)], sym, f'{g}｜{n}')
+    # --- 展開接続図（照合に使った出現）
+    if pick is not None:
+        dn, occ, orient = pick['drawing']['drawing_number'], pick['occ'], pick['orient']
+        label_sym = _combine(_cmp(cells, col('図面の対応', '展開接続図'), '展開接続図'), _cmp(cells, col('ケーブル', '種類'), '展開接続図'))
+        out += _marks_of(dn, [(occ['cable'], occ.get('_label_ref'))], label_sym, '図面の対応｜展開接続図')
+        units_cell = {i: _values(row.get(f'端末{i}_ユニット')) for i in (1, 2)}
+        for i in (1, 2):
+            side = orient['sides'][i]
+            ev = _side_evidence(occ, side)
+            gnd = 'GND' in _nfkc_squash(row.get(f'端末{i}_機器符号'))
+            code_sym = _combine(_cmp(cells, col(f'端末{i}', '機器符号'), '展開接続図'))
+            for w in occ['wires']:
+                e = w['ends'].get(side)
+                if not e or e['kind'] is None:
+                    continue
+                e_refs = e.get('_refs', {})
+                if e['name'] and e_refs.get('name') is not None:
+                    out += _marks_of(dn, [(e['name'], e_refs['name'])], code_sym, f'端末{i}｜機器符号')
+            if orient['known'] and units_cell[i]:
+                m = _module_key(row.get(f'端末{i}_モジュール') or '')
+                for uv in units_cell[i]:
+                    sym, _b, text = _unit_405_one(ctx, _unit_key(uv), m, ev, gnd)
+                    if not text:
+                        continue
+                    first = text.split('\n')[0]
+                    for w in occ['wires']:
+                        e = w['ends'].get(side)
+                        if not e:
+                            continue
+                        e_refs = e.get('_refs', {})
+                        ref = e_refs.get('regions', {}).get(text) or e_refs.get('devices', {}).get(text) or e_refs.get('nearby', {}).get(first)
+                        if ref is not None:
+                            out += _marks_of(dn, [(text, ref)], _combine(sym, _cmp(cells, col(f'端末{i}', 'モジュール'), '展開接続図')), f'端末{i}｜ユニット')
+                            break
+        for r in mat['rows']:
+            w = (r.get('wire') or {}).get('src')
+            if not w:
+                continue
+            for side in '-+':
+                e = w['ends'].get(side)
+                if e and e.get('_refs', {}).get('pin') is not None:
+                    out += _marks_of(dn, [(e['pin'], e['_refs']['pin'])], r['判定_PIN'], '芯線｜PIN')
+            for text, ref in list(zip(w['labels'], w.get('_label_refs', [])))[:2]:
+                out += _marks_of(dn, [(text, ref)], r['判定_色'] if _is_color(text) else r['判定_線番'], '芯線｜' + ('色' if _is_color(text) else '線番'))
+    return out
+
+
 def _evaluate_row(ctx, list_name, row):
     """一覧表の1行について、全項目のセルと芯線照合の行を作る。Returns: ({項目の列名: [セル]}, 芯線照合の行)"""
     cable = row['ケーブル番号']
@@ -1087,7 +1203,14 @@ def _evaluate_row(ctx, list_name, row):
                 '展開接続図のラベル': '、'.join(w['labels']),
                 '判定（PIN）': NA, '判定（線番）': NA, '判定（色）': NA,
                 '製作図': fab_name, '線番設定表': wire_name, '展開接続図': sch_name})
-    return cells, wire_rows
+    focus = {'list': list_name, 'row': row['行'], 'fabs': [d['drawing_number'] for d in ch['fabs']] if ch['fab_ok'] else [],
+             'wires': [d['drawing_number'] for d in ch['wires']] if ch['wire_ok'] else [],
+             'mine': [(d['drawing_number'], r['表'], r['行']) for d, r in ch['mine']],
+             'sel': [(x['drawing']['drawing_number'], x['row']['表'], x['row']['行']) for x in sel],
+             'schematic': pick['drawing']['drawing_number'] if pick is not None else '',
+             'occ': next((n for n, o in enumerate(pick['schematic']['occurrences']) if o is pick['occ']), None) if pick is not None else None}
+    marks = _row_marks(ctx, list_name, row, cells, ch, sel, pick, mat, multi, fab_conns)
+    return cells, wire_rows, marks, focus
 
 
 def _orphan_cells(cable, wire_drawings, schematic_drawings):
@@ -1144,11 +1267,12 @@ def check_consistency(drawings):
     rows, details, wires = [], [], []
     for cable, list_name, row_no, row, info in work:
         if row is not None:
-            cells, wire_rows = _evaluate_row(ctx, list_name, row)
+            cells, wire_rows, marks, focus = _evaluate_row(ctx, list_name, row)
         else:
-            cells, wire_rows = _orphan_cells(cable, sorted(info['wire']), sorted(info['schematic'])), []
+            cells, wire_rows, marks, focus = _orphan_cells(cable, sorted(info['wire']), sorted(info['schematic'])), [], [], None
         wires += wire_rows
-        out = {'ケーブル番号': cable, '一覧表の図番': list_name, '一覧表の行': row_no or '', 'cells': {}, 'links': {}}
+        out = {'ケーブル番号': cable, '一覧表の図番': list_name, '一覧表の行': row_no or '', 'cells': {}, 'links': {},
+               'marks': marks, 'focus': focus}
         n_ng = n_unread = 0
         for col in ITEM_COLUMNS:
             group = cells[col]

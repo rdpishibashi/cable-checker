@@ -8,6 +8,7 @@ import os
 
 import streamlit as st
 
+from model import cable_focus
 from model.cable_extractor import dedupe_by_name, is_dwg_filename, is_target_filename
 from model.consistency import KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, SET_393, SET_405, run_check
 from model.consistency_output import EXCEL_FILENAME as CHECK_FILENAME
@@ -113,7 +114,7 @@ def _run_check(files_405, files_393, sig):
 
 
 def _drawing_options(files_405, files_393):
-    """プレビューの「図面を表示」で選べる図面 {表示名: UploadedFile}（展開接続図 → 製作図の順、それぞれ図番順）。"""
+    """「図面の確認」で選べる図面 {表示名: UploadedFile}（展開接続図 → 製作図の順、それぞれ図番順）。"""
     options = {}
     for drawing_set, files in ((SET_405, files_405), (SET_393, files_393)):
         for f in sorted(files, key=lambda f: _stem(f.name)):
@@ -121,10 +122,9 @@ def _drawing_options(files_405, files_393):
     return options
 
 
-def _render_check_preview(result, files_405, files_393):
+def _render_check_preview(result):
     """出力する Excel の中身のプレビュー（シートの組み立ては `preview_sheets()`。ダウンロードする Excel と同じ関数）。
-    シートの選択のほかに、アップロードした図面を選んで viewer で見る「図面を表示」トグルを持つ（ケーブル番号は赤字）。
-    シート・トグル・図面を操作したら、枠を開いたままにする（on_change。無条件に開くと初回から開いてしまう）。"""
+    シートを操作したら、枠を開いたままにする（on_change。無条件に開くと初回から開いてしまう）。"""
     sheets = dict(check_preview_sheets(result))
     names = list(sheets)
     key, open_key = 'preview_sheet_check', 'preview_expanded_check'
@@ -136,18 +136,83 @@ def _render_check_preview(result, files_405, files_393):
 
     with st.expander("分析結果プレビュー", expanded=st.session_state.get(open_key, False)):
         sheet = st.selectbox("シートを選択", names, key=key, on_change=mark_expanded, width=sheet_select_width(names))
-        options = _drawing_options(files_405, files_393)
-        if st.session_state.get('preview_drawing_check') not in options:
-            st.session_state.pop('preview_drawing_check', None)
-        if options and st.toggle("図面を表示", value=False, key='preview_viewer_check', on_change=mark_expanded):
-            label = st.selectbox("図面を選択", list(options), key='preview_drawing_check', on_change=mark_expanded,
-                                 width=sheet_select_width(list(options)))
-            uf = options[label]
-            cable_viewer.render_cable_viewer(uf.name, uf.getvalue(), key='preview_viewer_mount_check')
         widths, table_width = column_widths(sheets[sheet])
         column_config = {col: st.column_config.Column(width=px) for col, px in widths.items()}
         st.dataframe(sheets[sheet], width=table_width, hide_index=True, column_config=column_config,
                      key='preview_table_check')
+
+
+def _section_title(role, drawing, counts=None):
+    """図面の開閉枠の見出し。ケーブルを選んだときは、強調した文字の件数（×・？・△・○）を添える。"""
+    title = f"{role} {drawing}"
+    return f"{title}　{cable_focus.counts_label(counts)}" if counts is not None else title
+
+
+def _viewer_section(title, role, drawing, uploaded, cable, marks=None, default_open=False):
+    """図面1枚の開閉枠。開いているときだけ描画する（閉じた枠の図面は送らない）。"""
+    key = f"drawing_exp_check_{role}_{drawing}_{cable}"
+    with st.expander(title, expanded=default_open, key=key, on_change="rerun") as exp:
+        if exp.open:
+            cable_viewer.render_cable_viewer(
+                uploaded.name, uploaded.getvalue(), key=f"drawing_mount_check_{role}_{drawing}",
+                marks=marks, title=title, cable=cable if marks is not None and cable != cable_focus.NO_CABLE else None)
+
+
+def _related_drawings(texts, uploaded_by_stem):
+    """図中の参照 `(-xxx-xx)` の一覧（パターン・図中の文字・一致した図面）。表示用で、Excel の「図番パターン照合」は別（405 のセット内だけ）。"""
+    refs = cable_focus.drawing_refs(texts, uploaded_by_stem)
+    if not refs:
+        st.caption("関連図面（図中の参照 `(-xxx-xx)`）はありません。")
+        return []
+    lines = ["**関連図面**（図中の参照 `(-xxx-xx)`。アップロードに一致する図面があれば、下の開閉枠で表示できます）"]
+    for r in refs:
+        found = '、'.join(r['matches']) if r['matches'] else 'アップロードに無い'
+        lines.append(f"- `{r['pattern']}`（図中の文字: {' ／ '.join(r['texts'][:3])}）→ {found}")
+    st.markdown('\n'.join(lines))
+    return refs
+
+
+def _render_drawing_section(result, files_405, files_393):
+    """「図面の確認」: アップロードした図面を種別のタイトル付きの開閉枠で表示する。
+    展開接続図を選ぶと、ケーブル番号を1つ選べる（関連する一覧表・線番設定表・製作図・展開接続図を並べて、関連する文字を記号の色で示す）。
+    展開接続図の図中の参照 `(-xxx-xx)` は「関連図面」として一覧し、アップロードに一致する図面は開閉枠で表示できる。"""
+    options = _drawing_options(files_405, files_393)
+    if not options:
+        return
+    uploaded_by_stem = {_stem(f.name): f for f in [*files_393, *files_405]}
+    with st.expander("図面の確認", expanded=False, key='drawing_section_check', on_change="rerun") as section:
+        if not section.open:
+            return
+        if st.session_state.get('drawing_select_check') not in options:
+            st.session_state.pop('drawing_select_check', None)
+        label = st.selectbox("図面を選択", list(options), key='drawing_select_check', width=sheet_select_width(list(options)))
+        uploaded = options[label]
+        stem = _stem(uploaded.name)
+        if not label.endswith(f"（{SET_405}）"):
+            _viewer_section(_section_title(cable_focus.ROLE_FAB, stem), cable_focus.ROLE_FAB, stem, uploaded, cable_focus.NO_CABLE,
+                            default_open=True)
+            return
+        cables = [cable_focus.NO_CABLE, *cable_focus.cables_in(result, stem)]
+        if st.session_state.get('drawing_cable_check') not in cables:
+            st.session_state.pop('drawing_cable_check', None)
+        cable = st.selectbox("ケーブルを選択", cables, key='drawing_cable_check', width=sheet_select_width(cables))
+        refs = _related_drawings(cable_viewer.drawing_texts(uploaded.getvalue()), uploaded_by_stem)
+
+        if cable == cable_focus.NO_CABLE:
+            _viewer_section(_section_title(cable_focus.ROLE_SCHEMATIC, stem), cable_focus.ROLE_SCHEMATIC, stem, uploaded, cable,
+                            default_open=True)
+        else:
+            for sec in cable_focus.focus(result, cable, stem):
+                target = uploaded if sec['drawing'] == stem else uploaded_by_stem.get(sec['drawing'])
+                if target is None:
+                    continue
+                _viewer_section(_section_title(sec['role'], sec['drawing'], sec['counts']), sec['role'], sec['drawing'], target, cable,
+                                marks=sec['marks'], default_open=sec['drawing'] == stem and sec['role'] == cable_focus.ROLE_SCHEMATIC)
+        for r in refs:
+            for name in r['matches']:
+                if name != stem:
+                    _viewer_section(f"関連図面 {r['pattern']}　{name}", f"ref{r['pattern']}", name, uploaded_by_stem[name], cable,
+                                    marks=[] if cable != cable_focus.NO_CABLE else None)
 
 
 def _render_check_result(state, files_405, files_393):
@@ -167,7 +232,8 @@ def _render_check_result(state, files_405, files_393):
                 "（ケーブル一覧表・線番設定表・ケーブル製作図のどれにも当たらず、一覧表の図面パターン〈製作図・接続図〉も指していません）")
     st.subheader("チェック結果")
     st.caption(_summary_caption(result))
-    _render_check_preview(result, files_405, files_393)
+    _render_check_preview(result)
+    _render_drawing_section(result, files_405, files_393)
     st.download_button(
         "分析結果ダウンロード", data=state['xlsx'], file_name=CHECK_FILENAME,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

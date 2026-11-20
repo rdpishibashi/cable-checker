@@ -47,14 +47,22 @@ def mount_viewer(**kwargs):
     return _get_cable_viewer(sig)(**kwargs)
 
 
-def render_cable_viewer(fname, dxf_bytes, key):
-    """図面 `dxf_bytes` を描き、ケーブル番号を含む文字を赤字にして表示する。
-    読めない・描けない図面は警告だけを出す（ほかの図面の表示には影響しない）。"""
+def render_cable_viewer(fname, dxf_bytes, key, marks=None, title=None, cable=None):
+    """図面 `dxf_bytes` を描いて表示する。marks が None ならケーブル番号を含む文字を赤字に、marks があれば記号の色で塗る
+    （`cable_preview.build_viewer_data`）。読めない・描けない図面は警告だけを出す（ほかの図面の表示には影響しない）。"""
     try:
         with st.spinner(PREPARING_TEXT):
             base = render_base(dxf_bytes)
-            data = cable_preview.build_viewer_data(base, fname)
+            data = cable_preview.build_viewer_data(base, fname, marks, title, cable)
         data['height'] = CABLE_VIEWER_HEIGHT_PX
         mount_viewer(key=key, data=data, height=CABLE_VIEWER_HEIGHT_PX)
     except Exception as e:
         st.warning(f"{fname} を表示できませんでした: {e}")
+
+
+def drawing_texts(dxf_bytes):
+    """図面の文字（正規化した文字列のリスト）。描画結果（キャッシュ済み）から取る。読めない図面は空。"""
+    try:
+        return [t['text'] for t in render_base(dxf_bytes).texts]
+    except Exception:
+        return []

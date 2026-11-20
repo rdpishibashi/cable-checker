@@ -19,7 +19,7 @@ export default function(component) {
     S.side = parentElement.querySelector('#cv-side');
     const svg = S.svg;
     S.apply = () => { svg.setAttribute('viewBox', S.vb.join(' ')); };
-    const pt = (e) => {
+    const pt = S.pt = (e) => {
       const r = svg.getBoundingClientRect();
       const s = Math.max(S.vb[2] / r.width, S.vb[3] / r.height);
       const offx = (r.width - S.vb[2] / s) / 2, offy = (r.height - S.vb[3] / s) / 2;
@@ -69,6 +69,26 @@ export default function(component) {
     catch (err) { w.close(); note.textContent = 'この環境では別ウィンドウを開けません'; }
   };
 
+  // 色を付けた文字の外接矩形（画面座標→ viewBox 座標）に余白をつけて拡大する
+  const focusMarked = () => {
+    const els = [];
+    S.data.items.forEach((c) => S.svg.querySelectorAll('.' + c[0]).forEach((e) => els.push(e)));
+    if (!els.length) return;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    els.forEach((e) => {
+      const r = e.getBoundingClientRect();
+      if (!r.width && !r.height) return;
+      const a = S.pt({ clientX: r.left, clientY: r.top }), b = S.pt({ clientX: r.right, clientY: r.bottom });
+      x0 = Math.min(x0, a.x, b.x); y0 = Math.min(y0, a.y, b.y); x1 = Math.max(x1, a.x, b.x); y1 = Math.max(y1, a.y, b.y);
+    });
+    if (!isFinite(x0)) return;
+    const pad = Math.max(x1 - x0, y1 - y0) * 0.1 + 5;
+    let w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
+    const r = S.svg.getBoundingClientRect(), ar = r.width / Math.max(r.height, 1);
+    if (w / h < ar) w = h * ar; else h = w / ar;
+    S.vb = [(x0 + x1) / 2 - w / 2, (y0 + y1) / 2 - h / 2, w, h]; S.apply();
+  };
+
   const render = () => {
     const d = S.data;
     if (d.empty) { S.wrap.innerHTML = '<div style="padding:16px;color:#aaa">描画対象のエンティティがありません</div>'; return; }
@@ -82,16 +102,20 @@ export default function(component) {
     // 元の文字そのものの色を変える（SVG の文字は1件ごとの CSS クラスを持つ）
     const rules = [];
     d.items.forEach((c) => {
-      rules.push('#cv-cv .' + c[0] + '{' + c[1] + ':' + d.color + ';' +
-        (c[1] === 'fill' ? 'stroke:' + d.color + ';stroke-width:0.6px;vector-effect:non-scaling-stroke' : '') + '}');
+      const col = c[2] || d.color;
+      rules.push('#cv-cv .' + c[0] + '{' + c[1] + ':' + col + ';' +
+        (c[1] === 'fill' ? 'stroke:' + col + ';stroke-width:0.6px;vector-effect:non-scaling-stroke' : '') + '}');
     });
     S.svg.querySelector('#cv-hl').textContent = rules.join('\n');
     S.apply();
 
-    S.legendHtml = '<h4>' + esc(d.fname || '図面') + '</h4><div class="lv-row"><span class="lv-sw" style="background:' + d.color +
-      '"></span><span>ケーブル番号</span><span class="lv-cnt">' + d.count + ' 件</span></div>';
+    S.legendHtml = '<h4>' + esc(d.title || d.fname || '図面') + '</h4>' + (d.legend || []).map((l) =>
+      '<div class="lv-row"><span class="lv-sw" style="background:' + l[1] + '"></span><span>' + esc(l[0]) +
+      '</span><span class="lv-cnt">' + l[2] + ' 件</span></div>').join('') +
+      (d.missing ? '<div class="lv-warn">図面上で見つからない文字 ' + d.missing + ' 件</div>' : '');
     let h = S.legendHtml +
-      '<h4>操作</h4><button data-act="fit">全体表示</button><button data-act="fs">' +
+      '<h4>操作</h4><button data-act="fit">全体表示</button>' +
+      (d.items.length ? '<button data-act="focus">強調箇所</button>' : '') + '<button data-act="fs">' +
       (document.fullscreenElement ? '全画面を終了' : '全画面') + '</button><button data-act="pop">別ウィンドウ</button><div id="cv-fsnote" style="color:#e8a"></div>' +
       '<div style="color:#888;margin-top:6px;line-height:1.5">ホイール: 拡大縮小<br>ドラッグ: 移動<br>ダブルクリック: 全体表示</div>' +
       (d.hasFont ? '' : '<div class="lv-warn" style="margin-top:8px">日本語フォントが見つからないため、日本語の文字は表示されません。</div>');
@@ -99,6 +123,7 @@ export default function(component) {
     S.side.querySelectorAll('button[data-act]').forEach((b) => b.addEventListener('click', () => {
       const act = b.getAttribute('data-act');
       if (act === 'fit') { S.vb = S.vb0.slice(); S.apply(); return; }
+      if (act === 'focus') { focusMarked(); return; }
       const note = S.side.querySelector('#cv-fsnote'); note.textContent = '';
       if (act === 'pop') { openPopup(note); return; }
       if (document.fullscreenElement) { document.exitFullscreen(); return; }

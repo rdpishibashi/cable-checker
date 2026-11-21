@@ -38,3 +38,13 @@ def test_consistency_uses_the_shared_helpers():
     """守るもの: consistency は同じ補助を再定義せず、cell_values のものを使う（同一のオブジェクト）。"""
     assert consistency._values is cv.values and consistency._codes is cv.codes and consistency._squash is cv.squash
     assert consistency._is_color is cv.is_color and consistency._side is cv.side and consistency.item_column is cv.item_column
+
+
+def test_underscores_joining_words_become_spaces():
+    """守るもの: 単語をつなぐアンダースコアは空白にする（図面のラベルは空白の代わりに `＿` を使うことがある。`ＡＣＣＥＳＳＯＲＹ＿ＣＡＢＬＥ`・
+    `ＳＹＳＴＥＭ＿Ｉ／Ｆ＿ＢＯＸ＿Ｒ１`）。語の端の `_`・語でない文字の隣の `_` はそのまま。実図面 EE3298-556-51A）。"""
+    import unicodedata
+    from model.text_utils import underscores_to_spaces
+    assert underscores_to_spaces(unicodedata.normalize('NFKC', 'ＡＣＣＥＳＳＯＲＹ＿ＣＡＢＬＥ')) == 'ACCESSORY CABLE'
+    assert underscores_to_spaces('SYSTEM_I/F_BOX_R1') == 'SYSTEM I/F BOX R1'
+    assert underscores_to_spaces('_A_ (_B)') == '_A_ (_B)'

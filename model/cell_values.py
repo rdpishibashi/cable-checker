@@ -19,6 +19,7 @@ def squash(s):
     return re.sub(r'\s+', '', s).upper()
 
 
+
 def nfkc_squash(s):
     """NFKC で半角にそろえてから `squash`。"""
     return squash(unicodedata.normalize('NFKC', s or ''))

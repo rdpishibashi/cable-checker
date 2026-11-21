@@ -1,4 +1,4 @@
-"""Cable-checker: 展開接続図（405）とケーブル製作図（393）の DXF から、ケーブル番号の抽出・比較と、
+"""Cable-checker: 展開接続図（405）とケーブル図（393）の DXF から、ケーブル番号の抽出・比較と、
 ケーブル一覧表・線番設定表・ケーブル製作図・展開接続図の整合性チェックを1回で行う（View 層）。
 
 処理は model/ に置き、この画面は入力の受け取り・表示・ダウンロードだけを担う。
@@ -21,7 +21,7 @@ from view.preview_layout import column_widths, sheet_select_width
 st.set_page_config(page_title="Cable-checker", page_icon="🔌", layout="wide")
 
 CHECK_RESULT_KEY = 'check_result'  # {'sig': 入力の署名（405 の署名, 393 の署名）, 'result': run_check() の結果, 'errors': [...], 'xlsx': bytes}
-SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル製作図（393）'}
+SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル図（393）'}
 SPINNER_TEXT = "図面を読み取っています…（図面の数によっては数十秒かかります）"
 SECTION_STATUS_TEXT = "結果をまとめています…"
 
@@ -55,18 +55,18 @@ def _signature(files):
 
 
 def _render_header():
-    st.title("Cable-checker - 展開接続図・ケーブル製作図の整合性チェック")
+    st.title("Cable-checker - 展開接続図・ケーブル図の整合性チェック")
     st.write(
-        "展開接続図（405）とケーブル製作図（393）のDXFファイルをアップロードし、ケーブル番号の抽出・比較と、"
+        "展開接続図（405）とケーブル図（393）のDXFファイルをアップロードし、ケーブル番号の抽出・比較と、"
         "ケーブル一覧表・線番設定表・ケーブル製作図・展開接続図の整合性チェックを行います。"
     )
     with st.expander("ℹ️ プログラム説明", expanded=False):
         st.info("\n".join([
             "**使用手順：**",
-            "1. 展開接続図（405）とケーブル製作図（393）のDXFファイルを、それぞれのアップロード欄にアップロードします"
+            "1. 展開接続図（405）とケーブル図（393）のDXFファイルを、それぞれのアップロード欄にアップロードします"
             "（複数可・フォルダ可。図番の形式でないファイルは無視されます。DWGファイルは読み込めないので、"
             "DXFに変換してください。両方に同じ名前のファイルがあるときは、展開接続図の側を使います）。"
-            "どちらか片方だけでも実行できます",
+            "両方のアップロードが完了すると「整合性をチェック」ボタンが有効になります",
             "2. 「整合性をチェック」ボタンを押し、結果を「分析結果プレビュー」で確認して、Excelをダウンロードします"
             "（cable_consistency.xlsx）",
             "",
@@ -76,10 +76,10 @@ def _render_header():
             "各項目の判定は ○一致・△一致（根拠が弱い）・×不整合・？読めない・－対象外 の記号で、根拠は「照合明細」シートに出ます。",
             "",
             "**ケーブル番号：** `M` または `C`＋数字2桁＋英数字3文字（末尾に英字1文字を許す。例: M39001、M06004B、M65A61、C10021）。"
-            "全角は半角にそろえます。「W No.」に続く番号は、番号の後ろの文字を「備考」に入れます。同じ図面内の重複は1つにまとめます。"
-            "展開接続図と製作図のケーブル番号は「All Diff」シート（と、製作図のタイトル別の「…Diff」シート）で突き合わせます。",
+            "全角は半角にそろえます。「W No.」に続く番号は、番号の後ろの文字とラベルのすぐ下の文字を「備考」に入れます。同じ図面内の重複は1つにまとめます。"
+            "ケーブルごとに記載している図面（展開接続図・ケーブル一覧表・線番設定表・ケーブル製作図）は「ケーブル記載図面」シートに出ます。",
             "",
-            "**Excelファイルの内容：** Summary／図面一覧／ケーブル抽出／All Diff・各グループの Diff／整合性チェック／照合明細／"
+            "**Excelファイルの内容：** Summary／記号の説明／図面一覧／図面の関係／ケーブル抽出／ケーブル記載図面／整合性チェック／照合明細／"
             "芯線照合／展開接続図／ケーブル一覧表／線番設定表／製作図の接続表／製作図の文字／図番パターン照合",
         ]))
 
@@ -129,8 +129,6 @@ def _render_check_preview(result):
     sheets = dict(check_preview_sheets(result))
     names = list(sheets)
     key, open_key = 'preview_sheet_check', 'preview_expanded_check'
-    if st.session_state.get(key) not in names:
-        st.session_state.pop(key, None)  # 入力を差し替えて前回のシートが無いときは先頭（Summary）に戻す
 
     def mark_expanded():
         st.session_state[open_key] = True
@@ -249,10 +247,10 @@ def _summary_caption(result):
     compare = result['compare']['rows']
     both = sum(bool(r['drawings_405'] and r['drawings_393']) for r in compare)
     only_405 = sum(bool(r['drawings_405'] and not r['drawings_393']) for r in compare)
-    return (f"展開接続図 {sum(d['set'] == SET_405 for d in drawings)} 図面・ケーブル製作図 {sum(d['set'] == SET_393 for d in drawings)} 図面"
+    return (f"展開接続図 {sum(d['set'] == SET_405 for d in drawings)} 図面・ケーブル図 {sum(d['set'] == SET_393 for d in drawings)} 図面"
             f"（一覧表 {count(KIND_LIST)}・線番設定表 {count(KIND_WIRE)}・製作図 {count(KIND_FAB)}・"
             f"照合した展開接続図 {count(KIND_SCHEMATIC)}）／"
-            f"ケーブル番号 {len(compare)} 件（両方 {both}・展開接続図だけ {only_405}・ケーブル製作図だけ {len(compare) - both - only_405}）／"
+            f"ケーブル番号 {len(compare)} 件（両方 {both}・展開接続図だけ {only_405}・ケーブル図だけ {len(compare) - both - only_405}）／"
             f"一覧表の行 {len(rows)} 行（不整合 {sum(r['不整合数'] > 0 for r in rows)} 行・要確認 {sum(r['要確認数'] > 0 for r in rows)} 行）")
 
 
@@ -265,10 +263,12 @@ def main():
         files_393 = _render_uploader(SET_393, SET_LABELS[SET_393])
         files_393, same_name = _drop_names_of(files_393, files_405)
         for name in same_name:
-            st.warning(f"{name} は展開接続図（405）に同じ名前があるため、ケーブル製作図（393）の側をスキップしました。")
+            st.warning(f"{name} は展開接続図（405）に同じ名前があるため、ケーブル図（393）の側をスキップしました。")
 
-    if not files_405 and not files_393:
-        st.info("図番形式（例: EE6892-610-01B.dxf）のDXFファイルを、展開接続図・ケーブル製作図のどちらか（または両方）にアップロードしてください。")
+    if not files_405 or not files_393:
+        st.info("図番形式（例: EE6892-610-01B.dxf）のDXFファイルを、展開接続図・ケーブル図の両方にアップロードしてください。"
+                "大きなファイルはアップロードに時間がかかります。各欄の進捗表示が消えて両方の件数が出るまでお待ちください。")
+        st.button("整合性をチェック", type="primary", key='run_check', disabled=True)
         return
 
     sig = (_signature(files_405), _signature(files_393))

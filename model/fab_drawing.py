@@ -21,6 +21,7 @@ from .drawing_geometry import is_v as _is_v
 from .drawing_geometry import norm
 
 TOL = 0.3
+PORT_X_TOL = 0.5   # 電線の端が表の左右の辺に着いたとみなす x 方向の許容（辺から 0.32 離れた行がある。EE3298-556-51A の GND-D）。線どうしの連結の TOL は上げない
 
 
 def _key(s):
@@ -176,7 +177,7 @@ def _grid(segs, cell=5.0):
 
 
 def _at_port(p, tables):
-    return any(abs(p[0] - x) < TOL and r['y0'] + 0.1 < p[1] < r['y1'] - 0.1
+    return any(abs(p[0] - x) < PORT_X_TOL and r['y0'] + 0.1 < p[1] < r['y1'] - 0.1
                for t in tables for x in (t['x0'], t['x1']) for r in t['rows'])
 
 
@@ -259,7 +260,7 @@ def trace(tables, segs, txts, arc_ends=()):
         for r in t['rows']:
             for side, x in (('L', t['x0']), ('R', t['x1'])):
                 for wi, w in enumerate(wires):
-                    if any(abs(px - x) < TOL and r['y0'] + 0.1 < py < r['y1'] - 0.1 for px, py in _ends(w)):
+                    if any(abs(px - x) < PORT_X_TOL and r['y0'] + 0.1 < py < r['y1'] - 0.1 for px, py in _ends(w)):
                         ports.append((ti, r, side, find(wi)))
                         break
     table_txt = [x for x in txts if any(t['x0'] <= x.cx <= t['x1'] and t['y0'] <= x.cy <= t['y1'] for t in tables)]

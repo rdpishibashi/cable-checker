@@ -55,6 +55,8 @@ def _occurrence_refs(occ):
     out = []
     if occ.get('_label_ref') is not None:
         out.append((occ['cable'], occ['_label_ref']))
+    if occ.get('_remark_ref'):
+        out.append(occ['_remark_ref'])
     for w in occ['wires']:
         out += list(zip(w['labels'], w.get('_label_refs', [])))
         for e in w['ends'].values():

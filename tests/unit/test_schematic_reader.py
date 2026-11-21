@@ -112,7 +112,9 @@ def test_remark_after_cable_number_is_kept(tmp_path):
         if e.plain_text().startswith('W No.'):
             e.text = f'W No.{CABLE}\\PACCESSORY CABLE'
     doc.saveas(path)
-    assert occurrence(read(path))['remark'] == 'ACCESSORY CABLE'
+    occ = occurrence(read(path))
+    assert occ['remark'] == 'ACCESSORY CABLE'
+    assert occ['_remark_ref'] is None                                   # 同じ文字の中の備考は、ラベルの文字そのものが強調される
 
 
 def test_dashed_shield_on_symbol_edge_is_not_a_wire_but_dashed_wire_is(tmp_path):
@@ -164,13 +166,13 @@ def test_circle_terminal_gets_terminal_number_and_device_name_and_gnd_end(tmp_pa
 
 # ---------------------------------------------------------------- 細長いコネクタ枠（多ピン）
 
-def build_tall(tmp_path, label_box=False, name='EE0000-405-01A'):
+def build_tall(tmp_path, label_box=False, name='EE0000-405-01A', bottom=-100):
     """左右のコネクタが高さ 111 の細長い1枠（幅 9）で描かれた図面。横の芯線2本（y=8・3）が、枠の辺（x=9・x=200）に着く。
     label_box=True なら、右側の芯線の途中に、芯線に沿う横長のラベル枠（幅 75 × 高さ 5）を置く（x=20〜95、芯線はその両側で切れる）。"""
     doc = ezdxf.new('R2010', setup=True)
     msp = doc.modelspace()
-    _box(msp, 0, -100, 9, 11)
-    _box(msp, 200, -100, 209, 11)
+    _box(msp, 0, bottom, 9, 11)
+    _box(msp, 200, bottom, 209, 11)
     for y, pin, label in ((8, '1', 'P021'), (3, '2', 'N244')):
         if label_box and y == 8:
             _line(msp, (9, y), (20, y))
@@ -200,6 +202,13 @@ def test_tall_narrow_connector_frames_are_terminals_with_pins_and_names(tmp_path
         ends = wires[label]['ends']
         assert (ends['-']['kind'], ends['-']['name'], ends['-']['pin']) == ('box', 'CN1', pin)
         assert (ends['+']['kind'], ends['+']['name'], ends['+']['pin']) == ('box', 'CN2', pin)
+
+
+def test_connector_frame_up_to_350_long_is_a_terminal(tmp_path):
+    """守るもの: 37 ピンのコネクタのように、高さ 300 を超える細長い枠（幅 9 × 高さ 311）も端末として読める（上限は 350。
+    以前は 250 で、実図面 EE6892-611-01B の M65235 〈S-CNRFA・EXT.CONT。高さ 323〉の両端が読めなかった）。"""
+    wires = by_label(occurrence(read(build_tall(tmp_path, bottom=-300))))
+    assert wires['P021']['ends']['-']['name'] == 'CN1' and wires['P021']['ends']['+']['name'] == 'CN2'
 
 
 def test_tall_frame_unit_side_point_follows_the_wire_direction_not_the_frame_center(tmp_path, monkeypatch):
@@ -504,3 +513,180 @@ def test_circle_terminal_shape_has_center_and_radius_and_gnd_has_none(tmp_path):
     (cx, cy), r = ends['circle']['_shape']['circle']
     assert (round(cx, 1), round(cy, 1), round(r, 1)) == (50.0, 8.0, 1.0)
     assert ends['gnd']['_shape'] is None
+
+
+# ---------------------------------------------------------------- 長い筒（切れ目の続き印 `*1`）・コネクタ名の選び方
+
+def build_long_pipe(tmp_path, continued=True, name='EE0000-405-01A'):
+    """縦に長い筒（幅 4）を横の芯線が貫く図面。上端の丸みの円弧と線の端が 0.2 ずれている。
+    continued=True なら、筒は下端が開いて続き印 `*1` が付き、別の場所（x=150）の筒（上端が開いて `*1`、下端が丸み）へ続く。
+    芯線: 左の筒に y=60・y=80、右の筒に y=40・y=60。両端は 9 幅のコネクタ枠（左 x=0〜9、右 x=250〜259）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _box(msp, 0, 0, 9, 100)
+    _box(msp, 250, 0, 259, 100)
+    msp.add_arc((50, 90), 2, 0, 180, dxfattribs={'color': 2})
+    _line(msp, (48, 20), (48, 90.2), 2)
+    _line(msp, (52, 20), (52, 90.2), 2)
+    for y in (60, 80):
+        _line(msp, (9, y), (250, y))
+        _text(msp, '1', 4.5, y)
+        _text(msp, '1', 254.5, y)
+    if continued:
+        _text(msp, '*1', 50, 18, h=1.5)
+        msp.add_arc((150, 10), 2, 180, 360, dxfattribs={'color': 2})
+        _line(msp, (148, 10), (148, 70), 2)
+        _line(msp, (152, 10), (152, 70), 2)
+        _text(msp, '*1', 150, 72, h=1.5)
+        _line(msp, (9, 40), (250, 40))
+        _text(msp, '1', 4.5, 40)
+        _text(msp, '1', 254.5, 40)
+    _arrow(msp, (50, 92), 99.5)
+    _text(msp, f'W No.{CABLE}', 42, 99.5, ap=7)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def test_long_pipe_with_a_small_gap_between_arc_and_lines_is_one_symbol_with_its_wires(tmp_path):
+    """守るもの: 円弧と線の端が 0.2 ずれた細長い筒でも、筒の全体（外接矩形）を1つの記号として読み、貫く芯線が取れる
+    （以前は端点の許容 0.1 を超えて円弧の先端 2 だけが記号になり、芯線が0本だった。実図面 EE6892-611-01B の M65235）。"""
+    occ = occurrence(read(build_long_pipe(tmp_path, continued=False)))
+    assert occ['how'] == 'capsule' and len(occ['_symbols']) == 1
+    x0, y0, x1, y1 = occ['_symbols'][0]['box']
+    assert (round(y0), round(y1)) == (20, 92) and round(x1 - x0) == 4
+    assert len(occ['wires']) == 2
+
+
+def test_pipe_continued_by_a_star_mark_adds_the_other_pipe_and_its_wires(tmp_path):
+    """守るもの: 筒の開いた端に続き印（`*1`）があるとき、同じ続き印が付いた別の筒も同じケーブルの記号にし、そこを貫く芯線も含める
+    （長いケーブルを途中で切って別の場所へ続ける描き方。実図面 EE6892-611-01B の M65235）。続き印の無い図面は筒1つのまま。"""
+    occ = occurrence(read(build_long_pipe(tmp_path)))
+    assert len(occ['_symbols']) == 2
+    assert sorted(round(sym['box'][0]) for sym in occ['_symbols']) == [48, 148]
+    assert len(occ['wires']) == 3
+
+
+def test_connector_name_is_the_label_centred_over_the_frame_when_two_labels_are_equally_near(tmp_path):
+    """守るもの: コネクタ枠の上に、枠から同じ距離の文字が2つ並ぶとき（枠の真上の `INPUT` と、すぐ右の `CP(25A)`）は、枠の中心に近いほうを名前にする
+    （以前は文字の並び順で先の `CP(25A)` になった。実図面 EE6892-611-01B の M65232）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _box(msp, 50, 0, 59, 11)
+    _text(msp, 'CP(25A)', 62, 13.5, ap=5)          # 先に描く（並び順では先）。枠の右にはみ出して並ぶ
+    _text(msp, 'INPUT', 54.5, 13.5, ap=5)
+    path = tmp_path / 'EE0000-405-01A.dxf'
+    doc.saveas(path)
+    g, _doc = sr.load(str(path))
+    term = sr.terminal_at(g, sr.axis_rects(g), (50, 5), (1.0, 0.0))
+    assert term['connector'] == 'INPUT'
+
+
+# ---------------------------------------------------------------- コネクタ・端子で途切れたユニットの枠
+
+def build_gapped_frame(tmp_path, covered=True, name='EE0000-405-01A'):
+    """幅 40 × 高さ 80 の枠。左辺は、端子の円（直径 4.5）・コネクタ名の文字・コネクタ枠で途切れ、下辺は小さな円（直径 3）で途切れる。
+    covered=False なら、左辺の隙間（y=35〜47.25）に何も置かない。枠の中の下辺の近く（y=5）に名前 `MBX2 R1`。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _line(msp, (0, 80), (40, 80), 2)
+    _line(msp, (40, 0), (40, 80), 2)
+    _line(msp, (0, 0), (18, 0), 2)
+    _line(msp, (21, 0), (40, 0), 2)
+    msp.add_circle((19.5, 0), 1.5, dxfattribs={'color': 4})
+    _line(msp, (0, 80), (0, 47.25 if covered else 50), 2)
+    if covered:
+        msp.add_circle((0, 45), 2.25, dxfattribs={'color': 4})
+        _line(msp, (0, 42.75), (0, 35), 2)
+        _text(msp, 'AMC', 0, 32, ap=5)
+    _line(msp, (0, 25 if covered else 35), (0, 0), 2)
+    if covered:
+        _box(msp, -4.5, 25, 4.5, 30)
+    _text(msp, 'MBX2 R1', 20, 5, ap=5)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def test_frame_with_edges_interrupted_by_a_terminal_circle_connector_and_label_is_a_region(tmp_path):
+    """守るもの: 辺が端子の円・コネクタ枠・コネクタ名の文字で途切れたユニットの枠は、閉じた矩形の領域として、枠の辺に近い領域名候補（`MBX2 R1`）を持つ
+    （領域抽出は円で途切れた枠を閉じず、機器の箱も見つからないので、以前はユニットが読めなかった。実図面 EE6892-611-01B の MBX2 R1）。"""
+    g, _doc = sr.load(build_gapped_frame(tmp_path))
+    (region,) = sr.gapped_frame_regions(g)
+    assert sr._bbox(region['polygon']) == pytest.approx((0, 0, 40, 80), abs=0.7)
+    assert [name for _d, name in region['name_candidates']] == ['MBX2 R1']
+
+
+def test_frame_whose_edge_gap_is_not_filled_by_a_device_is_not_a_region(tmp_path):
+    """守るもの: 辺の隙間が部品・文字で埋まらない枠（何も無い隙間）は、閉じた領域にしない（無関係な線をつないで枠にしない）。"""
+    g, _doc = sr.load(build_gapped_frame(tmp_path, covered=False))
+    assert sr.gapped_frame_regions(g) == []
+
+
+def test_plain_closed_rectangle_is_not_returned_as_a_gapped_frame(tmp_path):
+    """守るもの: 途切れの無い閉じた矩形は、機器の箱（`axis_rects`）と区別がつかないので対象外（領域は足さない）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    _box(msp, 0, 0, 40, 80)
+    _text(msp, 'MBX2 R1', 20, 5, ap=5)
+    path = tmp_path / 'EE0000-405-01A.dxf'
+    doc.saveas(path)
+    g, _doc = sr.load(str(path))
+    assert sr.gapped_frame_regions(g) == []
+
+
+# ---------------------------------------------------------------- シールド（記号の端から伸びる破線）
+
+def test_dashed_lines_from_the_symbol_ends_to_another_ellipse_are_the_shield(tmp_path):
+    """守るもの: 楕円のケーブル記号の上下の端から同じ高さで伸びる破線と、その先の閉じた楕円（接地記号側）をシールドとして読む（`_shield`）。
+    実図面 EE6892-611-01B の M65232（出現 A）。接地記号・文字は含めない。"""
+    def extras(msp):
+        _line(msp, (30, 10), (40, 10), 3, 'DASHED')
+        _line(msp, (30, 1), (40, 1), 3, 'DASHED')
+        msp.add_ellipse((40, 5.5, 0), major_axis=(0, 4.5, 0), ratio=0.3, dxfattribs={'color': 2})
+    shield = occurrence(read(build(tmp_path, extras=extras)))['_shield']
+    assert len(shield['lines']) == 2 and len(shield['ellipses']) == 1
+    assert sorted(round(p[1]) for line in shield['lines'] for p in line) == [1, 1, 10, 10]
+
+
+def test_dashed_wire_through_the_symbol_centre_is_not_a_shield(tmp_path):
+    """守るもの: 芯線そのものが破線の図面（記号の中心を貫く破線。610-01B の ACCESSORY CABLE）は、シールドと取り違えない。"""
+    def extras(msp):
+        _line(msp, (30, 5.5), (40, 5.5), 3, 'DASHED')
+        msp.add_ellipse((40, 5.5, 0), major_axis=(0, 4.5, 0), ratio=0.3, dxfattribs={'color': 2})
+    assert occurrence(read(build(tmp_path, extras=extras)))['_shield'] is None
+
+
+# ---------------------------------------------------------------- ラベルのすぐ下の文字（備考）
+
+def test_text_just_below_the_cable_label_is_the_remark_unless_it_is_another_cable_label(tmp_path):
+    """守るもの: ケーブル番号のラベルのすぐ下の別の文字（`ACCESSORY CABLE`）を備考にする（以前は同じ文字の中の後ろだけで、備考が空だった。
+    実図面 EE6892-611-01B の M65232・M65239・M65A61）。下の文字がケーブル番号を含む（別のケーブルのラベル。610-01B の M65216 の下の `W No.M65217`）なら足さない。"""
+    path = build(tmp_path, extras=lambda msp: _text(msp, 'ACCESSORY CABLE', 22, 16.2, ap=7))
+    occ = occurrence(read(path))
+    assert occ['remark'] == 'ACCESSORY CABLE'
+    assert occ['_remark_ref'][0] == 'ACCESSORY CABLE' and occ['_remark_ref'][1] is not None      # 別の文字は viewer で強調する
+    path = build(tmp_path, extras=lambda msp: _text(msp, 'W No.M99999', 22, 16.2, ap=7), name='EE0001-405-01A')
+    assert [o['remark'] for o in read(path)['occurrences'] if o['cable'] == CABLE] == ['']
+
+
+def test_horizontal_pipe_is_continued_by_a_star_mark_too(tmp_path):
+    """守るもの: 続き印（`*1`）での筒の連結は、横長の筒でも働く（縦長の筒の向きの判定を取り違えて、横長で斜めの線を拾い連結できなかった）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    msp.add_arc((90, 50), 2, -90, 90, dxfattribs={'color': 2})
+    _line(msp, (20, 48), (90.2, 48), 2)
+    _line(msp, (20, 52), (90.2, 52), 2)
+    _text(msp, '*1', 18, 50, h=1.5)
+    msp.add_arc((10, 150), 2, 90, 270, dxfattribs={'color': 2})
+    _line(msp, (10, 148), (70, 148), 2)
+    _line(msp, (10, 152), (70, 152), 2)
+    _text(msp, '*1', 72, 150, h=1.5)
+    _line(msp, (71, 148), (73, 151), 2)      # 筒の端の近くの斜めの線（筒の線ではない）
+    _line(msp, (60, 30), (60, 170))
+    _arrow(msp, (92, 50), 59.5)
+    _text(msp, f'W No.{CABLE}', 84, 59.5, ap=7)
+    path = tmp_path / 'EE0000-405-01A.dxf'
+    doc.saveas(path)
+    occ = occurrence(read(str(path)))
+    assert occ['how'] == 'capsule' and len(occ['_symbols']) == 2

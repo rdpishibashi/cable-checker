@@ -52,7 +52,7 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
         for i in (1, 2):
             sym = _combine(*(_cmp(cells, col(f'端末{i}', n), '線番設定表') for n in ('ユニット', 'モジュール', '機器符号')))
             out += _marks_of(dn, wrefs.get(f'接続先{_side(x["orient"], i) + 1}'), sym, f'端末{i}｜接続先')
-        sym = _combine(_cmp(cells, col('ケーブル', '芯数'), '線番設定表'), num_wire)
+        sym = _combine(num_wire)                 # 線番の値の記号は線番の判定だけ（芯数の判定は混ぜない。一覧表の芯数の文字に出る）
         for k in x['row']:
             if re.fullmatch(r'線番\d+', k) and x['row'][k]:
                 out += _marks_of(dn, wrefs.get(k), sym, '芯線｜線番')
@@ -87,6 +87,10 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
         dn, occ, orient = pick['drawing']['drawing_number'], pick['occ'], pick['orient']
         label_sym = _combine(_cmp(cells, col('図面の対応', '展開接続図'), '展開接続図'), _cmp(cells, col('ケーブル', '種類'), '展開接続図'))
         out += _marks_of(dn, [(occ['cable'], occ.get('_label_ref'))], label_sym, '図面の対応｜展開接続図')
+        # ラベルのすぐ下の別の文字を備考にしたとき（`ACCESSORY CABLE`）は、その文字を「ケーブル｜種類」の展開接続図の比較の記号で強調する
+        remark_sym = _cmp(cells, col('ケーブル', '種類'), '展開接続図')
+        if occ.get('_remark_ref') and remark_sym:
+            out += _marks_of(dn, [occ['_remark_ref']], remark_sym, 'ケーブル｜種類')
         for i in (1, 2):
             side = orient['sides'][i]
             code_sym = _combine(_cmp(cells, col(f'端末{i}', '機器符号'), '展開接続図'))
@@ -153,6 +157,13 @@ def row_shapes(cells, pick, mat, fab_conns):
         out.append(_shape(dn, 'lines', occ['_leader'], sym, '図面の対応｜展開接続図'))
     for s in occ.get('_symbols', []):
         out.append(_shape(dn, s['shape'], s['box'], sym, '図面の対応｜展開接続図'))
+    shield = occ.get('_shield')
+    shield_rows = [r for r in mat['rows'] if r.get('shield')]
+    if shield and shield_rows:                              # 製作図の SG/SH と一致したシールド（破線と端の楕円。接地記号は含めない）
+        sh_sym = _worst([r['判定_線番'] for r in shield_rows])
+        out.append(_shape(dn, 'lines', shield['lines'], sh_sym, 'シールド'))
+        for box in shield['ellipses']:
+            out.append(_shape(dn, 'ellipse', box, sh_sym, 'シールド'))
     assigned = {id(r['wire']['src']): r for r in mat['rows'] if r.get('wire')}
     for w in occ['wires']:
         if not all((w['ends'].get(s) or {}).get('kind') for s in '-+'):

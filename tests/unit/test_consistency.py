@@ -617,7 +617,7 @@ def test_unmatched_sg_connection_is_weak_and_unreadable_pins_are_unread():
     assert sym(ds, 'pin') == UNREAD
 
 
-def test_wire_numbers_resolve_star_numbers_and_drain_numbers_are_weak():
+def test_wire_numbers_resolve_star_numbers_and_drain_numbers_are_not_compared():
     ds = with_schematic(build(), keep_wire_table=True,
                         wires=[wire(end('box', 'TBR1B', '1'), end('box', 'CN1', 'A'), labels=['S121C']),
                                wire(end('box', 'TBR1B', '2'), end('box', 'CN1', 'B'), labels=['T121C'])])
@@ -629,7 +629,69 @@ def test_wire_numbers_resolve_star_numbers_and_drain_numbers_are_weak():
     s, basis = cell(ds, 'num')
     assert s == NG and 'T999C' in basis
     with_fab_conns(ds, [{'端の数': 2, '端1_線番': 'S121C'}, {'端の数': 2, '端1_線番': 'SG'}], numbers={1, 2})
-    assert sym(ds, 'num') == WEAK                  # SG/SH が 405 に無いだけ
+    s, basis = cell(ds, 'num')
+    # SG/SH（シールド）は 405 に線番のラベルが無いので比べない（以前は △。実図面 EE6892-611-01B の M65232 の `SH`）。残りが一致なら ○
+    assert s == OK and '1/1 本' in basis
+
+
+def test_fab_table_left_and_right_values_are_paired_and_matched_with_both_end_pins_whatever_the_heading():
+    """守るもの: 製作図の表の見出し「線番」と「PIN No.」は同義。左の値と右の値を組にして、展開接続図の芯線の両端のピンに当てる（見出しの種類に関係なく。
+    `*n` は n 番目の端子 n。展開接続図の左右が逆でもよい）。線番の `*1`・ピンの `A` の組は、ピン 1 と A の芯線に当たる。組の一方（`GND` と 4）が合わなければ ×
+    （実図面 EE6892-611-01B の M65232: 製作図 `GND`-`GND` と 展開接続図 4-4）。"""
+    wires = [wire(end('box', 'TBR1B', '1'), end('box', 'CN1', 'A')), wire(end('box', 'TBR1B', '2'), end('box', 'CN1', 'B'))]
+    ds = with_schematic(build(), wires=wires)
+    with_fab_conns(ds, [{'端の数': 2, '端1_線番': '*1', '端2_PIN No.': 'A'}, {'端の数': 2, '端1_線番': '*2', '端2_PIN No.': 'B'}])
+    s, basis = cell(ds, 'pin')
+    assert s == OK and '2/2' in basis
+    with_fab_conns(ds, [{'端の数': 2, '端1_PIN No.': 'A', '端2_線番': '*1'}, {'端の数': 2, '端1_PIN No.': 'B', '端2_PIN No.': '2'}])
+    assert sym(ds, 'pin') == OK                                # 見出しが逆でも、同じ見出しの組でも、左右が逆でも
+    with_fab_conns(ds, [{'端の数': 2, '端1_線番': '*1', '端2_線番': '*1'}])
+    assert sym(ds, 'pin') == NG                                # 線番どうしの組 1-1 は、ピン 1-A の芯線に当たらない
+    wires = [wire(end('box', 'TBR1B', '1'), end('box', 'CN1', '1')), wire(end('box', 'TBR1B', '4'), end('box', 'CN1', '4'))]
+    ds = with_schematic(build(), wires=wires)
+    with_fab_conns(ds, [{'端の数': 2, '端1_線番': '*1', '端2_線番': '*1'}, {'端の数': 2, '端1_線番': 'GND', '端2_線番': 'GND'}])
+    s, basis = cell(ds, 'pin')
+    assert s == NG and 'GND' in basis                          # `*1`-`*1` は 1-1 ○、`GND`-`GND` は 4-4 ×
+    with_fab_conns(ds, [{'端の数': 2, '端1_線番': 'SH', '端2_線番': 'SH'}])
+    assert sym(ds, 'pin') == NA                                # SG/SH だけの組は比べない
+
+
+def test_fab_connection_goes_to_the_row_whose_occurrence_matches_it_better_even_when_neither_matches_fully():
+    """守るもの: 1枚の製作図の2つの区間（2行）で、`GND`-`GND`（表A）は出現 A（4-4・ラベル GND）、`GND`-`D`（表B）は出現 B（4-D）に当たりが大きい（ピンの一致＞ラベルの一致）。
+    どちらの出現にも完全には合わない（GND と 4）ので、以前の「完全に合うか」の判定では両方の行に残り、別の区間の接続でも × になった（実図面 EE6892-611-01B の M65232）。
+    各行には当たりの大きい接続だけが残り、その接続は ×（GND と 4 は一致しない）。"""
+    ds = two_section_cable()
+    occ_a, occ_b = by_name(ds, SCH_NAME)['schematic']['occurrences']
+    occ_a['wires'].append(wire(end('circle', 'TBPS2R1', '4', regions=['MPD RACK1']), end('circle', 'TBR1C', '4', regions=['RACK']), labels=['GND']))
+    occ_b['wires'].append(wire(end('circle', 'TBR1C', '4', regions=['RACK']), end('box', 'INPUT', 'D', regions=['RF PS2'])))
+    by_name(ds, FAB_NAME)['fab_conns'] += [{'端の数': 2, '端1_線番': 'GND', '端2_線番': 'GND'}, {'端の数': 2, '端1_線番': 'GND', '端2_PIN No.': 'D'}]
+    res = check_consistency(ds)
+    rows = lambda n: [w for w in res['wires'] if w['一覧表の行'] == n and w['製作図の線番'] == 'GND']   # noqa: E731
+    assert [(w['製作図の端2 PIN'], w['判定（PIN）']) for w in rows(1)] == [('', NG)]      # 1行目: GND-GND だけ（4-4 と GND は不一致 ×）
+    assert [(w['製作図の端2 PIN'], w['判定（PIN）']) for w in rows(2)] == [('D', NG)]     # 2行目: GND-D だけ
+
+
+def test_remark_text_below_the_label_is_marked_with_the_cable_kind_judgement_of_405():
+    """守るもの: ラベルのすぐ下の別の文字を備考にしたとき（`ACCESSORY CABLE`）、その文字を「ケーブル｜種類」の展開接続図の比較の記号で強調する
+    （以前は強調されなかった。実図面 EE6892-611-01B の M65232 の出現 B）。"""
+    ds = with_schematic(build(), row={'ケーブル種類': 'ACCESSORY CABLE'})
+    occ = by_name(ds, SCH_NAME)['schematic']['occurrences'][0]
+    occ.update({'remark': 'ACCESSORY CABLE', '_remark_ref': ('ACCESSORY CABLE', (9.0, 9.0))})
+    res = check_consistency(ds)
+    marks = [m for m in res['rows'][0]['marks'] if m['drawing'] == SCH_NAME and m['anchor'] == (9.0, 9.0)]
+    assert [(m['text'], m['symbol'], m['item']) for m in marks] == [('ACCESSORY CABLE', OK, 'ケーブル｜種類')]
+    occ['remark'] = 'OTHER CABLE'                                  # 合わなければ ×
+    assert [m['symbol'] for m in check_consistency(ds)['rows'][0]['marks'] if m['anchor'] == (9.0, 9.0)] == [NG]
+
+
+def test_fab_wire_number_column_value_also_matches_a_405_pin():
+    """守るもの: 「線番」の列の値（`1`・`-`）が展開接続図の芯線のピンに当たれば、線番も一致（見出しの「線番」と「PIN No.」は同義）。どちらにも無ければ ×。"""
+    wires = [wire(end('box', 'TBR1B', '1'), end('box', 'CN1', 'A'), labels=['S121C'])]
+    ds = with_schematic(build(), wires=wires)
+    with_fab_conns(ds, [{'端の数': 2, '端1_線番': 'A'}])
+    assert sym(ds, 'num') == OK
+    with_fab_conns(ds, [{'端の数': 2, '端1_線番': 'Q999'}])
+    assert sym(ds, 'num') == NG
 
 
 def test_wire_numbers_are_not_compared_when_405_has_only_color_labels():
@@ -671,6 +733,140 @@ def test_best_occurrence_by_code_match_is_used_when_the_cable_appears_several_ti
     ds = with_schematic(build(), occ=bad, row={'端末2_機器符号': 'CN1'})
     by_name(ds, SCH_NAME)['schematic']['occurrences'].append(good)
     assert sym(ds, 'c1') == OK and sym(ds, 'c2') == OK
+
+
+def test_two_list_rows_of_one_cable_use_different_occurrences_when_the_match_is_equal():
+    """守るもの: 一覧表に同じケーブル番号が2行（端末1・端末2が別）あり、展開接続図にも2つの出現があるとき、判定が同点なら
+    2行目はまだ使っていない出現に割り当てる（以前は先頭の出現が両方の行に選ばれ、2つ目の出現の文字が強調されなかった。実図面 EE6892-611-01B の M65232）。"""
+    a = occurrence([wire(end('box', 'AA1', '1'), end('box', 'AA2', 'A'))])
+    b = occurrence([wire(end('box', 'BB1', '1'), end('box', 'BB2', 'A'))])
+    ds = with_schematic(build(), occ=a, row={'端末1_機器符号': 'ZZ1', '端末2_機器符号': 'ZZ2'})
+    by_name(ds, SCH_NAME)['schematic']['occurrences'].append(b)
+    second = copy.deepcopy(by_name(ds, LIST_NAME)['list_rows'][0])
+    second['行'] = 2
+    by_name(ds, LIST_NAME)['list_rows'].append(second)
+    for d in ds:
+        for occ in (d.get('schematic') or {}).get('occurrences', []):
+            occ['_label_ref'] = (0.0, 0.0) if occ is a else (1.0, 1.0)
+    res = check_consistency(ds)
+    used = [{(m['anchor']) for m in r['marks'] if m['drawing'] == SCH_NAME and m['text'] == CABLE} for r in res['rows']]
+    assert used == [{(0.0, 0.0)}, {(1.0, 1.0)}]
+
+
+def two_section_cable():
+    """1枚の製作図・1枚の線番設定表に、同じケーブル番号の2つの区間（一覧表の2行）が描かれた図面セット（実図面 EE6892-611-01B の M65232 の形）。
+    1行目: 端末1 MPD RACK1 TBPS2R1 ― 端末2 RACK TBR1C（線番設定表の行・展開接続図の出現 A〈ピン 1/2〉）。
+    2行目: 端末1 RACK TBR1C ― 端末2 RF PS2 INPUT（出現 B〈ピン 1/2 ― A/B〉。線番設定表には行が無い）。
+    製作図の接続: `*1`-A・`*2`-B（2行目のピン付き）と、`*1`・`*2` どうし（ピンなし）。"""
+    row1 = list_row(**{'端末1_ユニット': 'MPD RACK1', '端末1_機器符号': 'TBPS2R1', '端末2_ユニット': 'RACK', '端末2_機器符号': 'TBR1C',
+                       '接続図パターン': 'EE****-610-**'})
+    row2 = list_row(**{'行': 2, '端末1_ユニット': 'RACK', '端末1_機器符号': 'TBR1C', '端末2_ユニット': 'RF PS2', '端末2_機器符号': 'INPUT',
+                       '接続図パターン': 'EE****-610-**'})
+    ds = build()
+    by_name(ds, LIST_NAME)['list_rows'] = [row1, row2]
+    by_name(ds, FAB_NAME)['fab_notes'] = ['-634-07']
+    by_name(ds, WIRE_NAME)['wire_rows'] = [wire_row(lines1=('MPD RACK', 'TBPS2R1'), lines2=('RACK', 'TBR1C'), values={1: 'U1', 2: 'V1'})]
+    by_name(ds, FAB_NAME)['fab_conns'] = [
+        {'端の数': 2, '端1_線番': '*1', '端2_PIN No.': 'A'}, {'端の数': 2, '端1_線番': '*2', '端2_PIN No.': 'B'},
+        {'端の数': 2, '端1_線番': '*1', '端2_線番': '*1'}, {'端の数': 2, '端1_線番': '*2', '端2_線番': '*2'}]
+    occ_a = occurrence([wire(end('circle', 'TBPS2R1', str(n), regions=['MPD RACK1']), end('circle', 'TBR1C', str(n), regions=['RACK']),
+                             labels=[lab]) for n, lab in ((1, 'U1'), (2, 'V1'))])
+    occ_b = occurrence([wire(end('circle', 'TBR1C', str(n), regions=['RACK']), end('box', 'INPUT', pin, regions=['RF PS2']))
+                        for n, pin in ((1, 'A'), (2, 'B'))])
+    ds.append(drawing(SCH_NAME, set='405', kinds=['展開接続図'], schematic={
+        'title': '', 'error': '', 'no_text': False, 'region_error': '', 'occurrences': [occ_a, occ_b]}))
+    return ds
+
+
+def test_pinned_fab_connections_of_the_other_section_are_not_compared_with_this_rows_occurrence():
+    """守るもの: 1枚の製作図に2つの区間が描かれるとき、2行目の区間のピン付きの接続（`*1`-A・`*2`-B）は、1行目の出現（ピン 1/2）と比べて × にしない。
+    別の出現（B）で満たされる接続は、その行（2行目）だけで比べる（以前は1行目が PIN × になり、2行目の ○ を隠した。実図面 EE6892-611-01B の M65232）。"""
+    ds = two_section_cable()
+    assert sym(ds, 'pin', row_no=1) != NG
+    s, basis = cell(ds, 'pin', row_no=2)
+    assert s == OK and '2/2' in basis
+    by_name(ds, SCH_NAME)['schematic']['occurrences'].pop()          # もう一方の出現が無ければ、1行目は従来どおり × になる
+    assert sym(ds, 'pin', row_no=1) == NG
+
+
+def test_pinless_fab_connections_are_assigned_to_the_405_wire_with_the_same_wire_number():
+    """守るもの: ピンの無い製作図の接続（`*1`-`*1`）は、`*n` を線番設定表の行で置き換えた線番（U1）と同じラベルの展開接続図の芯線に割り当てる
+    （図形・ラベルの強調のため）。左右の値の組 1-1 が芯線の両端のピン 1-1 にも当たるので、PIN も ○。以前は割り当てが無く、出現 A の芯線とラベルが強調されなかった
+    （実図面 EE6892-611-01B の M65232）。"""
+    res = check_consistency(two_section_cable())
+    rows = {w['線番接続ID']: w for w in res['wires'] if w['一覧表の行'] == 1 and w['線番接続ID']}
+    assert rows['*1']['展開接続図のラベル'] == 'U1' and rows['*2']['展開接続図のラベル'] == 'V1'
+    assert rows['*1']['判定（PIN）'] == OK and rows['*1']['判定（線番）'] == OK
+
+
+def test_sh_connection_matches_when_405_draws_the_shield_and_its_shapes_are_marked():
+    """守るもの: 製作図の SH の接続は、展開接続図にシールド（`_shield`）が描かれていれば線番が ○（描かれていなければ比べない＝－）。シールドの破線と楕円は
+    viewer の図形（○）になる（実図面 EE6892-611-01B の M65232 出現 A の SH。接地記号は含めない）。"""
+    ds = two_section_cable()
+    by_name(ds, FAB_NAME)['fab_conns'].append({'端の数': 2, '端1_線番': 'SH', '端2_線番': 'SH'})
+    sh = lambda res: next(w for w in res['wires'] if w['一覧表の行'] == 1 and w['製作図の線番'] == 'SH')   # noqa: E731
+    assert sh(check_consistency(ds))['判定（線番）'] == NA
+    occ_a = by_name(ds, SCH_NAME)['schematic']['occurrences'][0]
+    occ_a['_shield'] = {'lines': [[(0.0, 0.0), (9.0, 0.0)]], 'ellipses': [(8.0, -1.0, 10.0, 1.0)]}
+    res = check_consistency(ds)
+    assert sh(res)['判定（線番）'] == OK
+    shapes = [x for x in res['rows'][0]['shapes'] if x['item'] == 'シールド' and x['drawing'] == SCH_NAME]
+    assert any(x['kind'] == 'ellipse' and x['symbol'] == OK for x in shapes)
+
+
+def test_star_numbers_of_the_row_without_wire_table_row_use_the_sibling_rows_wire_table_row():
+    """守るもの: 製作図の `*n` は図面単位で共通なので、線番設定表に行が無い2行目も、`*n` の置き換えと `*n` の集合の比較には別の行（1行目）が選んだ行を使う
+    （端末・芯数は使わない）。2行目の `*1`-A は線番 U1 になり、線番設定表との比較は ○（以前は根拠なしで、製作図の表B の `*1` が強調されなかった）。"""
+    res = check_consistency(two_section_cable())
+    row2 = next(r for r in res['rows'] if r['一覧表の行'] == 2)
+    detail = res['details'][row2['links'][COL['num']]]
+    assert row2['cells'][COL['num']] == OK and '線番設定表 ○ 一致' in detail['判断根拠']
+    pinned = [w for w in res['wires'] if w['一覧表の行'] == 2 and w['線番接続ID'] == '*1' and w['製作図の端2 PIN'] == 'A']
+    assert pinned and pinned[0]['線番設定表の線番'] == 'U1'
+
+
+def test_wire_table_wire_number_marks_follow_the_wire_number_judgement_only():
+    """守るもの: viewer の線番設定表の線番の値（U1 など）の記号は、線番の判定だけで決める。芯数の判定（ここでは一覧表 9 本 ≠ 線番設定表 2 本で ×）を混ぜない
+    （以前は混ぜて、一致した U122 などが × で表示された。実図面 EE6892-611-01B の M65232。D7）。"""
+    ds = two_section_cable()
+    by_name(ds, LIST_NAME)['list_rows'][0]['芯数'] = '9'
+    by_name(ds, WIRE_NAME)['wire_rows'][0]['_refs'] = {'線番1': [('U1', (1.0, 1.0))], '線番2': [('V1', (2.0, 2.0))]}
+    res = check_consistency(ds)
+    assert sym(ds, 'core', row_no=1) == NG
+    marks = [m for m in res['rows'][0]['marks'] if m['drawing'] == WIRE_NAME and m['item'] == '芯線｜線番']
+    assert marks and {m['symbol'] for m in marks} == {OK}
+
+
+def test_row_without_its_own_wire_table_row_is_not_compared_with_the_wire_table_of_the_sibling_row():
+    """守るもの: 同じケーブル番号の別の行が線番設定表の行を使っているとき、この行（線番設定表に行が無い区間）は、線番設定表では比べない（根拠なし）。
+    ○ の根拠は展開接続図だけで、「対応する行が無い」の × で 405 の ○ を隠さない。線番設定表の線番（U1・V1）の比較は1行目で ○。
+    別の行が線番設定表の行を使っていなければ、従来どおり「対応する行が無い」× （根拠: `test_no_wire_row_fits_the_list_terminals_is_ng_with_the_rows_listed`）。"""
+    ds = two_section_cable()
+    for key in ('u1', 'c1', 'c2'):
+        s, basis = cell(ds, key, row_no=2)
+        assert s == OK and '線番設定表' not in basis, (key, basis)
+    assert sym(ds, 'num', row_no=1) != NG
+    s, basis = cell(ds, 'num', row_no=2)
+    assert s != NG and '対応する行が無い' not in basis
+    by_name(ds, LIST_NAME)['list_rows'].pop(0)                         # 別の行が無ければ、2行目は線番設定表の行が無い ×
+    assert sym(ds, 'u1', row_no=2) == NG
+
+
+def test_occurrences_are_assigned_to_rows_as_a_whole_not_first_come_first_served():
+    """守るもの: 同じケーブル番号の2行と2つの出現があるとき、割り当ては全体で決める。1行目はどの出現にも同じ程度に合い、2行目は出現 A にしか合わないとき、
+    先着順（1行目が先頭の A を取る）だと両方の行が A になり B が使われない。全体で決めれば 1行目＝B・2行目＝A（以前の貪欲法の不具合。D4）。"""
+    near = [('CN1', 0.0, 'CN1')]
+    occ_a = occurrence([wire(end('circle', 'TBR1B', '1', regions=['RACK']), end('box', 'CN1', 'A', nearby=near))])
+    occ_b = occurrence([wire(end('circle', 'TBR1B', '1', regions=['RACK']), end('box', 'ZZ9', 'A'))])
+    occ_a['_label_ref'], occ_b['_label_ref'] = (0.0, 0.0), (1.0, 1.0)
+    ds = with_schematic(build(), occ=occ_a, row={'端末2_機器符号': ''})
+    by_name(ds, SCH_NAME)['schematic']['occurrences'].append(occ_b)
+    second = copy.deepcopy(by_name(ds, LIST_NAME)['list_rows'][0])
+    second.update({'行': 2, '端末2_機器符号': 'CN1'})
+    by_name(ds, LIST_NAME)['list_rows'].append(second)
+    res = check_consistency(ds)
+    used = [{m['anchor'] for m in r['marks'] if m['drawing'] == SCH_NAME and m['text'] == CABLE} for r in res['rows']]
+    assert used == [{(1.0, 1.0)}, {(0.0, 0.0)}]
 
 
 # ---------------------------------------------------------------- 展開接続図の読み取り（2段目）と補助
@@ -817,7 +1013,7 @@ def test_schematic_without_text_marks_the_drawing_as_having_no_text(monkeypatch)
 
 
 def test_run_check_adds_extracts_and_the_cable_comparison_to_the_result(monkeypatch):
-    """守るもの: run_check は照合の結果に、抽出結果（セットごと）とケーブル番号の比較（全体・グループ別）を足す。405 だけでも動く。"""
+    """守るもの: run_check は照合の結果に、抽出結果（セットごと）とケーブル番号の比較（全体）を足す。405 だけでも動く。"""
     monkeypatch.setattr(C, 'analyze_drawing', lambda path, name: drawing(name))
     monkeypatch.setattr(C, 'extract_cables', lambda path, name: {
         'drawing_number': os.path.splitext(name)[0], 'title': 'T', 'subtitle': '',
@@ -826,10 +1022,9 @@ def test_run_check_adds_extracts_and_the_cable_comparison_to_the_result(monkeypa
     assert errors == [] and set(result['extracts']) == {'405', '393'}
     assert [(r['cable'], r['drawings_405'], r['drawings_393']) for r in result['compare']['rows']] == [
         ('M39001', [SCH_NAME], ['EE0001-393-01A'])]
-    assert [g['name'] for g in result['compare']['groups']] == ['T']
     result, errors = C.run_check([(f'{SCH_NAME}.dxf', b'x')], [])
     assert errors == [] and result['rows'] == [] and result['extracts']['393'] == []
-    assert [r['drawings_393'] for r in result['compare']['rows']] == [[]] and result['compare']['groups'] == []
+    assert [r['drawings_393'] for r in result['compare']['rows']] == [[]]
     assert result['unused'] == [SCH_NAME]                                  # 一覧表が無いので、どの接続図パターンにも指されない
 
 

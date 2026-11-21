@@ -13,6 +13,8 @@ from dataclasses import dataclass, replace
 
 import ezdxf
 
+from .text_utils import underscores_to_spaces
+
 TOL = 0.3
 _SKIP_BLOCKS = ('SX_DeltaSymbol', 'JZB')
 
@@ -74,11 +76,11 @@ def text_anchor(e):
 
 
 def norm(s):
-    """全角→半角（NFKC）。字間を空けた表記（'T B'、'R 1 4 - 5'）は空白を詰める。
+    """全角→半角（NFKC）。単語をつなぐアンダースコアは空白にする。字間を空けた表記（'T B'、'R 1 4 - 5'）は空白を詰める。
 
     空白で区切った語が2語以上ですべて1文字のときだけ詰める（'DC PS3' や 'D-sub 25P' は詰めない）。
     """
-    s = unicodedata.normalize('NFKC', s).strip()
+    s = underscores_to_spaces(unicodedata.normalize('NFKC', s)).strip()
     lines = []
     for line in s.split('\n'):
         toks = line.split()

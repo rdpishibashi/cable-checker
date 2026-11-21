@@ -267,6 +267,16 @@ def test_fab_tables_and_straight_connections_with_label(tmp_path):
     assert first['端1_位置'] == '左' and first['端2_位置'] == '右'
 
 
+def test_fab_wire_ending_up_to_0_5_short_of_the_table_edge_still_connects_that_row(tmp_path):
+    """守るもの: 電線の端が表の左右の辺から 0.32 離れていても（0.5 以内）その行につながる（以前は許容 0.3 で、その行の接続が落ちた。
+    実図面 EE3298-556-51A の GND-D）。線どうしの連結の許容（0.3）は変えない。"""
+    doc, msp = fab_doc()
+    line(msp, (50, 94), (99.68, 94))        # 右の表の辺（x=100）から 0.32 手前
+    line(msp, (50, 86), (100, 86))
+    res, pairs = conns(tmp_path, doc)
+    assert pairs == [[(0, 1), (1, 1)], [(0, 2), (1, 2)]]
+
+
 def test_fab_note_block_is_not_a_matching_text_but_stays_in_all_texts(tmp_path):
     """守るもの: 注記の文章ブロック（先頭行に「注記」）は、記載の照合と強調に使う `text_refs` に入れない（文中の `Module` が種類 `UL` に部分一致して
     注記ブロック全体が ○ になった。EE3298-574-72C）。図中の参照を探す全文字 `texts` には残す。"""

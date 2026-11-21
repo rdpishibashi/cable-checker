@@ -16,13 +16,14 @@
 1つの項目に複数の比較（線番設定表・製作図・展開接続図）があるときは、最も重いものをその項目の判定にする。
 
 図面の dict（`analyze_drawing()` の戻り値＋2段目）:
-  drawing_number, set（'405'＝展開接続図のセット／'393'＝ケーブル製作図のセット。必ずある）, no_text（文字が1つも無い）, kinds（'ケーブル一覧表'・'線番設定表'・'ケーブル製作図'・'展開接続図'）,
+  drawing_number, set（'405'＝展開接続図のセット／'393'＝ケーブル図のセット。必ずある）, no_text（文字が1つも無い）, kinds（'ケーブル一覧表'・'線番設定表'・'ケーブル製作図'・'展開接続図'）,
   list_rows（一覧表の行。`cable_list_table.parse()` の rows）,
   wire_rows（線番設定表の行。`'_lines'` に接続先ごとの行）, wire_notes（注記の製作図パターン）,
   fab_wire_numbers（製作図の線番の表にある `*n` の n）, fab_notes（注記の線番設定表パターン）,
   fab_texts（図面の全文字。削除済みを除く）, fab_text（その文字を空白なし・大文字でつなげたもの）,
   fab_conns（製作図の接続の明細）, schematic（展開接続図として読んだ結果。`schematic_reader.analyze_schematic()`）
 """
+import itertools
 import os
 import re
 import tempfile
@@ -48,9 +49,9 @@ KIND_FAB = 'ケーブル製作図'
 KIND_SCHEMATIC = '展開接続図'
 KIND_REF = '図中の参照'  # 図番パターン照合シートの「参照元図面種別」（展開接続図の文字が指す。照合には使わない）
 
-SET_405, SET_393 = '405', '393'     # アップロードのセット（展開接続図／ケーブル製作図）
+SET_405, SET_393 = '405', '393'     # アップロードのセット（展開接続図／ケーブル図）
 
-PHASE_DRAWINGS = 'ケーブル製作図の読み取り'
+PHASE_DRAWINGS = 'ケーブル図の読み取り'
 PHASE_EXTRACT = '展開接続図の抽出'
 PHASE_SCHEMATIC = '展開接続図の読み取り'
 
@@ -490,21 +491,28 @@ def _orientation(row, occ):
 _STATUS_RANK = {'OK': 0, '片側': 1, '符号なし': 2, 'NG': 3, '読めない': 4}
 
 
-def _pick_occurrence(ctx, row):
-    """接続図パターンが当たった図面にある、このケーブル番号の出現のうち、機器符号の判定が最も良いもの。無ければ None。"""
-    cable = row['ケーブル番号']
-    cands = []
+def _occurrences_of(ctx, row):
+    """接続図パターンが当たった図面にある、この行のケーブル番号の出現 [(図面, 読み取り結果, 出現)]。"""
+    out = []
     for name in _schematic_names(ctx, _values(row.get('接続図パターン'))):
         d = ctx.by_name_405[name]
         s = d.get('schematic')
         if not s:
             continue
-        for occ in s['occurrences']:
-            if occ['cable'] == cable:
-                cands.append((d, s, occ, _orientation(row, occ)))
+        out += [(d, s, occ) for occ in s['occurrences'] if occ['cable'] == row['ケーブル番号']]
+    return out
+
+
+def _pick_occurrence(ctx, row):
+    """接続図パターンが当たった図面にある、このケーブル番号の出現のうち、機器符号の判定が最も良いもの。無ければ None。"""
+    cands = [(d, s, occ, _orientation(row, occ)) for d, s, occ in _occurrences_of(ctx, row)]
     if not cands:
         return None
-    d, s, occ, orient = min(cands, key=lambda c: _STATUS_RANK[c[3]['status']])
+    chosen = ctx.assignment.get(id(row))
+    if chosen is not None:      # 同じケーブル番号が一覧表に複数行あるとき: ケーブル番号ごとに決めた行と出現の割り当て
+        d, s, occ, orient = next((c for c in cands if c[2] is chosen), cands[0])
+    else:
+        d, s, occ, orient = min(cands, key=lambda c: _STATUS_RANK[c[3]['status']])
     return {'drawing': d, 'schematic': s, 'occ': occ, 'orient': orient, 'title': s.get('title', '')}
 
 
@@ -772,6 +780,16 @@ def _count_cells(row, ch, sel, mine, fab_conns, pick, multi):
 
 # ---------------------------------------------------------------- 芯線（線番・PIN・色）
 
+def _conn_vals(c):
+    """製作図の接続の左の値・右の値（見出しの「線番」と「PIN No.」は同義。同じ端に両方あれば PIN No.）。`*n` は n 番目の端子（n）として扱う。"""
+    vals = []
+    for k in (1, 2):
+        v = (c.get(f'端{k}_PIN No.') or c.get(f'端{k}_線番') or '').strip().lstrip('*')
+        if v:
+            vals.append(_squash(v))
+    return vals
+
+
 def _conn_info(d, c, wire_row):
     """製作図の端が2つの接続1本の事実。`*n` は線番設定表の行の値で置き換える。"""
     raw = c.get('端1_線番') or c.get('端2_線番') or ''
@@ -782,8 +800,9 @@ def _conn_info(d, c, wire_row):
         conn_id = raw.strip()
         resolved = (wire_row or {}).get(f'線番{m.group(1)}', '') if wire_row else ''
     labels = [x.strip() for x in (c.get('ラベル') or '').split(' | ') if x.strip()]
+    # 表の見出し「線番」と「PIN No.」は同義。左の値・右の値の組として、芯線の両端のピンに当てる（同じ端に両方あれば PIN No.）。`*n` は n 番目の端子（n）として扱う
     return {'drawing': d['drawing_number'], 'pins': (c.get('端1_PIN No.') or '', c.get('端2_PIN No.') or ''),
-            'raw': raw, 'id': conn_id, 'number': resolved, 'colors': [x for x in labels if _is_color(x)]}
+            'raw': raw, 'id': conn_id, 'number': resolved, 'colors': [x for x in labels if _is_color(x)], 'vals': _conn_vals(c)}
 
 
 def _wire_matrix(fab_conns, wire_row, pick, multi):
@@ -795,56 +814,91 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
     out = {'rows': [], 'extras': [], 'pin_unread': False}
     wires, labels405 = [], {'number': set(), 'color': set()}
     comparable = pick is not None and not multi
+    shield = pick['occ'].get('_shield') if comparable else None   # 展開接続図のケーブル記号のシールド（破線＋端の楕円）
     if comparable:
         for w in pick['occ']['wires']:
             p = {s: ((w['ends'].get(s) or {}).get('pin') or '') for s in '-+'}
-            wires.append({'pins': p, 'pool': Counter(x for x in p.values() if x), 'labels': w['labels'], 'src': w})
+            wires.append({'pins': p, 'pool': Counter(_squash(x) for x in p.values() if x), 'labels': w['labels'], 'src': w})
             for x in w['labels'][:2]:
                 labels405['color' if _is_color(x) else 'number'].add(_squash(x))
         out['pin_unread'] = not any(w['pool'] for w in wires)
+    # 線番の列の値（`1`・`-` など）も、芯線のピンに当たれば一致（見出しの「線番」と「PIN No.」は同義）
+    pin_keys = {_squash(x) for w in wires for x in w['pins'].values() if x}
     used, assign = set(), {}
     for j, c in enumerate(conns):
-        fp = Counter(p for p in c['pins'] if p)
-        if not fp or not comparable:
+        fp = Counter(c['vals'])
+        if not fp or not comparable or all(v in _DRAIN for v in fp):
             continue
         for wi, w in enumerate(wires):
             if wi not in used and not (fp - w['pool']):
                 used.add(wi)
                 assign[j] = wi
                 break
+    # ピンの無い接続（線番だけ。表A の `*1`-`*1` など）は、線番（`*n` を置き換えた値）が同じラベルの芯線に割り当てる。判定は変えない
+    # （PIN は比べない・線番はラベルで決まる）。割り当てるのは、芯線の図形・ラベルの強調のため。
+    by_label = set()       # ピンでは当たらず、線番のラベルで割り当てた接続（PIN の判定は ○ にしない）
+    if comparable:
+        for j, c in enumerate(conns):
+            key = _squash(c['number'])
+            if j in assign or any(c['pins']) or not key or key in _DRAIN:
+                continue
+            for wi, w in enumerate(wires):
+                if wi not in used and key in {_squash(x) for x in w['labels'][:2] if not _is_color(x)}:
+                    used.add(wi)
+                    assign[j] = wi
+                    by_label.add(j)
+                    break
+    # ピンの組が完全には合わない接続（`GND`-`D` と 4-D など）は、当たり（ピンの一致）が最も大きい芯線に割り当てる（芯線の図形・ピンの文字を、この接続の判定で塗るため）
+    if comparable:
+        for j, c in enumerate(conns):
+            if j in assign or not c['vals'] or all(v in _DRAIN for v in c['vals']):
+                continue
+            fp = Counter(c['vals'])
+            scored = [(sum(min(n, w['pool'][v]) for v, n in fp.items()), wi) for wi, w in enumerate(wires) if wi not in used]
+            best = max(scored, default=(0, None))
+            if best[0] > 0:
+                used.add(best[1])
+                assign[j] = best[1]
+                by_label.add(j)
     for j, c in enumerate(conns):
         has_pins = any(c['pins'])
+        pair = bool(c['vals']) and not all(v in _DRAIN for v in c['vals'])      # 左右の値の組を芯線の両端のピンと比べる（SG/SH だけの組は比べない）
         # PIN
-        if not has_pins or not comparable:
+        if not pair or not comparable:
             pin = NA
         elif out['pin_unread']:
-            pin = UNREAD
-        elif j in assign:
+            pin = UNREAD if has_pins else NA
+        elif j in assign and j not in by_label:
             pin = OK
         else:
             pin = WEAK if _squash(c['number']) in _DRAIN or _squash(c['raw']) in _DRAIN else NG
         # 線番（製作図 ↔ 405）
         key = _squash(c['number'])
-        if not key or not comparable or not labels405['number']:
+        is_shield = bool(shield) and key in _DRAIN
+        if is_shield:
+            num = OK                                       # SG/SH は、展開接続図にシールドが描かれていれば一致
+        elif not key or not comparable:
             num = NA
-        elif key in labels405['number']:
+        elif key in labels405['number'] or key in pin_keys:
             num = OK
+        elif not labels405['number']:
+            num = NA
         else:
-            num = WEAK if key in _DRAIN else NG
+            num = NA if key in _DRAIN else NG       # SG/SH（シールド）は 405 に線番のラベルが無いので比べない
         # 色
         if not c['colors'] or not comparable or not labels405['color']:
             color = NA
         else:
             color = OK if all(_squash(x) in labels405['color'] for x in c['colors']) else NG
         w = wires[assign[j]] if j in assign else None
-        out['rows'].append({**c, 'wire': w, '判定_PIN': pin, '判定_線番': num, '判定_色': color})
+        out['rows'].append({**c, 'wire': w, '判定_PIN': pin, '判定_線番': num, '判定_色': color, 'shield': is_shield})
     for wi, w in enumerate(wires):
         if wi not in used:
             out['extras'].append(w)
     return out
 
 
-def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns):
+def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns, sibling_sel=()):
     """芯線の 線番・PIN・色 のセルと、芯線照合の行。"""
     num_cell, pin_cell, color_cell = _Cell('芯線 線番'), _Cell('芯線 PIN'), _Cell('芯線 色')
     fab_names = [d['drawing_number'] for d in ch['fabs']]
@@ -852,23 +906,23 @@ def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns):
     # --- 線番設定表 ↔ 製作図: `*n` の集合
     fab_n = set().union(*(d['fab_wire_numbers'] for d in ch['fabs'])) if ch['fab_ok'] else set()
     fmt = lambda s: ','.join(f'*{n}' for n in sorted(s))  # noqa: E731
-    if mine and fab_n:
-        if not sel:
+    if (mine or sibling_sel) and fab_n:
+        if not sel and not sibling_sel:
             num_cell.add('線番設定表', NG, B_NO_ROW)
         else:
             wire_n = set()
-            for x in sel:
+            for x in (sel or sibling_sel):
                 wire_n.update(int(mm.group(1)) for k, v in x['row'].items()
                               if v and (mm := re.fullmatch(r'線番(\d+)', k)))
             same = fab_n == wire_n
             num_cell.add('線番設定表', OK if same else NG,
                          f'{B_MATCH}（製作図 {fmt(fab_n)} / 線番設定表 {fmt(wire_n)}）' if same
                          else f'製作図 {fmt(fab_n)} ≠ 線番設定表 {fmt(wire_n)}')
-            num_cell.source(*sorted({x['drawing']['drawing_number'] for x in sel}), *fab_names)
+            num_cell.source(*sorted({x['drawing']['drawing_number'] for x in (sel or sibling_sel)}), *fab_names)
             num_cell.value('線番設定表', f'線番設定表 {fmt(wire_n)}').value('製作図', f'製作図 {fmt(fab_n)}')
 
     # --- 製作図 ↔ 展開接続図（`*n` は選んだ行の値で置き換える。行ごとに試し、最もよいものを採る）
-    candidates = [x['row'] for x in sel] or [None]
+    candidates = [x['row'] for x in (sel or sibling_sel)] or [None]
     best = None
     for wr in candidates:
         mat = _wire_matrix(fab_conns, wr, pick, multi)
@@ -898,7 +952,7 @@ def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns):
                     basis = f'{B_MATCH}（{n_ok}/{len(syms)} 本）'
                 else:
                     bad = [r for r in rows if r[key] == sym]
-                    shown = {'PIN': lambda r: '/'.join(p for p in r['pins'] if p),
+                    shown = {'PIN': lambda r: '/'.join(r['vals']),
                              '線番': lambda r: r['number'], '色': lambda r: '、'.join(r['colors'])}[label]
                     basis = f'合わない: {"、".join(shown(r) for r in bad[:6])}' if sym == NG else B_UNREAD
                 cell.add('展開接続図', sym, basis)
@@ -922,6 +976,41 @@ def _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns):
 
 # ---------------------------------------------------------------- 一覧表の行を評価する
 
+_ASSIGN_LIMIT = 5000     # 全探索する割り当ての数の上限（超えたら行ごとに最も判定のよい出現）
+
+
+def _assign_occurrences(ctx):
+    """同じケーブル番号が一覧表に複数行あるとき、行と展開接続図の出現の割り当てを、ケーブル番号ごとに決める。
+
+    判定の悪さ（`_STATUS_RANK`）の合計が最小で、同じ出現を複数の行が使う数がなるべく少ない割り当て（全探索）。出現が行より少なければ重複してよい。
+    評価順に早い者勝ちで取ると、あとの行がより合う出現を取れないため。"""
+    for cable, rows in ctx.cable_rows.items():
+        if len(rows) < 2:
+            continue
+        options = []
+        for row in rows:
+            cands = [(occ, _STATUS_RANK[_orientation(row, occ)['status']]) for _d, _s, occ in _occurrences_of(ctx, row)]
+            if not cands:
+                options = None
+                break
+            options.append(cands)
+        if not options:
+            continue
+        total = 1
+        for cands in options:
+            total *= len(cands)
+        if total > _ASSIGN_LIMIT:
+            continue
+        best = None
+        for combo in itertools.product(*options):
+            cost = sum(c for _o, c in combo)
+            dup = len(combo) - len({id(o) for o, _c in combo})
+            if best is None or (cost, dup) < best[0]:
+                best = ((cost, dup), combo)
+        for row, (occ, _c) in zip(rows, best[1]):
+            ctx.assignment[id(row)] = occ
+
+
 class _Ctx:
     def __init__(self, drawings):
         self.drawings = drawings
@@ -929,6 +1018,13 @@ class _Ctx:
         self.by_name_405 = _index(drawings, SET_405)
         self.schematics_read = any(d.get('schematic') is not None for d in drawings)
         self.unit_keys = _all_unit_keys(drawings)
+        self.cable_rows = {}            # ケーブル番号 → 一覧表の行（同じケーブル番号が複数行あるとき、別のケーブルとして行ごとに照合する）
+        for d in drawings:
+            for lr in d['list_rows']:
+                if lr['ケーブル番号']:
+                    self.cable_rows.setdefault(lr['ケーブル番号'], []).append(lr)
+        self.assignment = {}            # id(一覧表の行) → 割り当てた展開接続図の出現（同じケーブル番号が複数行あるときだけ。`_assign_occurrences`）
+        _assign_occurrences(self)
 
 
 def _correspondence_cells(ctx, row, ch, list_name, pick):
@@ -1003,27 +1099,67 @@ def _correspondence_cells(ctx, row, ch, list_name, pick):
     return {'一覧表': [list_cell], '製作図': [fab_cell], '線番設定表': [w_fig, w_row, w_note], '展開接続図': [sch_cell]}
 
 
+def _conn_score(vals, occ):
+    """製作図の接続の左右の値が、出現のどれか1本の芯線にどれだけ当たるか（ピンが当たれば 2、線番のラベルだけなら 1。芯線ごとの合計の最大）。"""
+    best = 0
+    for w in occ['wires']:
+        pins = Counter(_squash(x) for x in ((w['ends'].get(side) or {}).get('pin') or '' for side in '-+') if x)
+        labels = {_squash(x) for x in w['labels'][:2] if not _is_color(x)}
+        score = 0
+        for v, n in Counter(vals).items():
+            hit = min(n, pins[v])
+            score += 2 * hit + (n - hit if v in labels else 0)
+        best = max(best, score)
+    return best
+
+
+def _belongs_to_other_occurrence(ctx, row, pick, conn):
+    """製作図の接続が、選んだ出現より、同じケーブル番号の別の行に割り当てた出現に当たるか（当たりが大きいか）。
+
+    1枚の製作図に同じケーブル番号の2つの区間（一覧表の2行）が描かれるとき、別の区間の接続は、この行の PIN・線番の比較から外す。
+    当たりは `_conn_score`（ピンの一致＞線番のラベルの一致）。"""
+    vals = _conn_vals(conn)
+    if not vals or all(v in _DRAIN for v in vals):
+        return False
+    others = [ctx.assignment[id(x)] for x in ctx.cable_rows.get(row['ケーブル番号'], []) if x is not row and id(x) in ctx.assignment]
+    if not others:
+        others = [occ for _d, _s, occ in _occurrences_of(ctx, row)]
+    own = _conn_score(vals, pick['occ'])
+    return any(occ is not pick['occ'] and _conn_score(vals, occ) > own for occ in others)
+
+
 def _evaluate_row(ctx, list_name, row):
     """一覧表の1行について、全項目のセルと芯線照合の行を作る。Returns: ({項目の列名: [セル]}, 芯線照合の行)"""
     cable = row['ケーブル番号']
     ch = _chain(row, ctx.by_name_393)
     pick = _pick_occurrence(ctx, row)
     fab_conns = [(d, c) for d in ch['fabs'] for c in d['fab_conns'] if c.get('端の数') == 2] if ch['fab_ok'] else []
+    siblings = [x for x in ctx.cable_rows.get(cable, []) if x is not row]
+    if pick is not None and siblings:
+        fab_conns = [fc for fc in fab_conns if not _belongs_to_other_occurrence(ctx, row, pick, fc[1])]
     multi = pick is not None and _is_single_multicore(row, pick['occ'], len(fab_conns))
     sel, _how = _select_wire_rows(row, ch['mine'])
-
+    mine, sibling_sel = ch['mine'], []
+    if not sel:
+        for x in siblings:
+            sibling_sel = _select_wire_rows(x, ch['mine'])[0]
+            if sibling_sel:
+                # 線番設定表の行は同じケーブル番号の別の行のもの。端末・芯数はこの行では線番設定表と比べない（根拠なし）。
+                # 製作図の `*n` は図面（ケーブル番号）単位で共通なので、`*n` の置き換えと `*n` の集合の比較には別の行の行を使う
+                mine = []
+                break
     cells = {}
     for key, lst in _correspondence_cells(ctx, row, ch, list_name, pick).items():
         cells[item_column('図面の対応', key)] = lst
     for i in (1, 2):
-        unit_cell, mod_cell, code_cell = _terminal_cells(ctx, row, i, sel, ch['mine'], pick, ch['fabs'], ch['fab_ok'])
+        unit_cell, mod_cell, code_cell = _terminal_cells(ctx, row, i, sel, mine, pick, ch['fabs'], ch['fab_ok'])
         part = _fab_text_cell(f'端末{i} 部品種別', _values(row.get(f'端末{i}_部品種別')), ch['fabs'], ch['fab_ok'])
         for name, c in (('ユニット', unit_cell), ('モジュール', mod_cell), ('機器符号', code_cell), ('部品種別', part)):
             cells[item_column(f'端末{i}', name)] = [c]
-    kind_cell, core_cell = _count_cells(row, ch, sel, ch['mine'], fab_conns, pick, multi)
+    kind_cell, core_cell = _count_cells(row, ch, sel, mine, fab_conns, pick, multi)
     cells[item_column('ケーブル', '種類')] = [kind_cell]
     cells[item_column('ケーブル', '芯数')] = [core_cell]
-    num_cell, pin_cell, color_cell, mat, wr = _wire_cells(ctx, row, ch, sel, ch['mine'], pick, multi, fab_conns)
+    num_cell, pin_cell, color_cell, mat, wr = _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns, sibling_sel)
     cells[item_column('芯線', '線番')] = [num_cell]
     cells[item_column('芯線', 'PIN')] = [pin_cell]
     cells[item_column('芯線', '色')] = [color_cell]
@@ -1185,6 +1321,20 @@ def pattern_resolutions(drawings):
         for p, texts in refs.items():
             add('展開接続図', KIND_REF, p, wire_pattern_regex, src, by_405, remark=' ／ '.join(texts))
     return out
+
+
+def fab_drawings_by_cable(drawings):
+    """ケーブル番号 → そのケーブルの製作図の図番（一覧表の行の製作図パターンが当たった 393 の図面。0件・複数件もそのまま）。
+
+    製作図にはケーブル番号が書かれていないので、一覧表のパターン経由でだけ分かる。"""
+    by_393 = _index(drawings, SET_393)
+    out = {}
+    for d in drawings:
+        for row in d['list_rows']:
+            for p in _values(row.get('製作図パターン')):
+                for hit in _resolve(fab_pattern_regex(p), by_393):
+                    out.setdefault(row['ケーブル番号'], set()).add(hit['drawing_number'])
+    return {cable: sorted(names) for cable, names in out.items()}
 
 
 def drawing_relations(drawings):

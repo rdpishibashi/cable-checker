@@ -23,6 +23,7 @@ import ezdxf.path
 
 from .cable_extractor import CABLE_BODY, extract_cables
 from .drawing_geometry import norm, text_anchor
+from .label_classifier import REGION_NAME, classify_label
 from .region_detector import DEFAULT_REGION_CONFIG, _point_in_polygon, analyze_dxf_regions
 
 WNO = re.compile(r'(?<![0-9A-Z])W\s*NO\.?\s*(' + CABLE_BODY + r')(?![0-9A-Z])', re.I)
@@ -282,7 +283,25 @@ class Grid:
 
 # ---------------------------------------------------------------- ケーブル番号
 
+def _text_below(g, t):
+    """ラベル t のすぐ下（隙間 0〜文字高さの 1.5 倍、左端の差 3 以内、横に重なる）にある、同じブロックの横書きの文字。ケーブル番号を含む文字は除く。"""
+    h = t.h or 2.5
+    best = None
+    for o in g.txts:
+        if o is t or o.vertical or o.src != t.src:
+            continue
+        gap = t.y0 - o.y1
+        if -0.2 <= gap <= 1.5 * h and o.x0 < t.x1 and o.x1 > t.x0 and abs(o.x0 - t.x0) <= 3:
+            first = o.s.split('\n')[0].strip()
+            if WNO.search(o.s) or BARE.fullmatch(first):
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, o)
+    return best[1] if best else None
+
+
 def cable_labels(g):
+    """ケーブル番号のラベル。備考は、番号の後ろの文字と、ラベルのすぐ下の文字（`ACCESSORY CABLE` など。別の文字で描かれる）。"""
     out = []
     for t in g.txts:
         first = t.s.split('\n')[0]
@@ -292,6 +311,16 @@ def cable_labels(g):
             out.append({'cable': m.group(1).upper(), 'txt': t, 'remark': rest})
         elif BARE.fullmatch(first.strip()):
             out.append({'cable': first.strip().upper(), 'txt': t, 'remark': '', 'bare': True})
+    for lab in out:
+        t = lab['txt']
+        if t.vertical:
+            continue
+        below = _text_below(g, t)
+        if below is not None:
+            extra = below.s.strip()
+            if extra and extra not in lab['remark']:
+                lab['remark'] = f"{lab['remark']}\n{extra}".strip() if lab['remark'] else extra
+                lab['remark_txt'] = below      # 備考にした別の文字（viewer で強調する）
     return out
 
 
@@ -445,31 +474,82 @@ def capsule_from_arc(g, grid, arc):
     return _capsule_bfs(g, grid, arc)
 
 
-def _capsule_bfs(g, grid, arc, limit=40):
-    """角を丸めた長円（四分円＋線）: 同じ色の円弧・線を端点でたどった外接矩形（limit 要素まで）。"""
-    pts = list(arc.pts)
-    todo = [arc.pts[0], arc.pts[-1]]
-    seen_c, seen_s = {id(arc)}, set()
+CAPSULE_JOIN_TOL = 0.3     # 円弧と線の端点のずれの許容（実データで 0.2 ずれる筒がある）
+
+
+def _trace_outline(g, grid, color, seeds, pts, seen_c, limit=40):
+    """同じ色の円弧・線を、端点（ずれ CAPSULE_JOIN_TOL 以内）でたどった点の集まり（limit 要素まで）。"""
+    todo = list(seeds)
+    seen_s = set()
     while todo and len(seen_c) + len(seen_s) < limit:
         p = todo.pop()
-        for k in grid.near(p, 0.2):
+        for k in grid.near(p, CAPSULE_JOIN_TOL + 0.1):
             s = g.segs[k]
-            if k in seen_s or s.color != arc.color or is_dashed(s):
+            if k in seen_s or s.color != color or is_dashed(s):
                 continue
             for a, b in ((s.a, s.b), (s.b, s.a)):
-                if math.dist(a, p) < 0.1:
+                if math.dist(a, p) < CAPSULE_JOIN_TOL:
                     seen_s.add(k)
                     pts += [a, b]
                     todo.append(b)
         for c in g.curves:
-            if id(c) in seen_c or c.kind != 'ARC' or c.color != arc.color:
+            if id(c) in seen_c or c.kind != 'ARC' or c.color != color:
                 continue
             for q in (c.pts[0], c.pts[-1]):
-                if math.dist(q, p) < 0.1:
+                if math.dist(q, p) < CAPSULE_JOIN_TOL:
                     seen_c.add(id(c))
                     pts += c.pts
                     todo += [c.pts[0], c.pts[-1]]
+    return pts
+
+
+def _capsule_bfs(g, grid, arc, limit=40):
+    """角を丸めた長円（四分円＋線）: 同じ色の円弧・線を端点でたどった外接矩形（limit 要素まで）。"""
+    pts = _trace_outline(g, grid, arc.color, [arc.pts[0], arc.pts[-1]], list(arc.pts), {id(arc)}, limit)
     return _bbox(pts)
+
+
+CONTINUATION = re.compile(r'\*\d+')   # 筒の切れ目の続き印（`*1`）
+
+
+def continued_capsules(g, grid, box, color, end_tol=4.0):
+    """細長い筒（長円）の開いた端に続き印（`*1`）があるとき、同じ続き印が付いた別の筒の外接矩形を返す。
+
+    図面が長いケーブルを途中で切って別の場所に続きを描く描き方（M65235）。続き印は筒の幅と同じ間隔の2本の線の端にある。
+    Returns: [(x0, y0, x1, y1)]
+    """
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    if min(w, h) <= 0 or max(w, h) < 3 * min(w, h):
+        return []
+    vertical = h >= w
+    ends = [((x0 + x1) / 2, y0), ((x0 + x1) / 2, y1)] if vertical else [(x0, (y0 + y1) / 2), (x1, (y0 + y1) / 2)]
+    marks = [t for t in g.txts if CONTINUATION.fullmatch(t.s.strip())
+             and any(math.dist((t.cx, t.cy), e) <= end_tol for e in ends)]
+    width = min(w, h)
+    out = []
+    for m in marks:
+        for o in g.txts:
+            if o is m or o.s.strip() != m.s.strip() or math.dist((o.cx, o.cy), (m.cx, m.cy)) < 1.0:
+                continue
+            seeds = []
+            for k, s in enumerate(g.segs):
+                if s.color != color or is_dashed(s):
+                    continue
+                d = s.dir()
+                if not ((abs(d[0]) < 0.01) if vertical else (abs(d[1]) < 0.01)):      # 筒の長辺の向き（縦長なら縦線、横長なら横線）だけ
+                    continue
+                near = min((s.a, s.b), key=lambda p: math.dist(p, (o.cx, o.cy)))
+                if math.dist(near, (o.cx, o.cy)) <= end_tol:
+                    seeds.append((k, near))
+            for i, (k1, p1) in enumerate(seeds):
+                for k2, p2 in seeds[i + 1:]:
+                    gap = abs(p1[0] - p2[0]) if vertical else abs(p1[1] - p2[1])
+                    if 1.0 <= gap <= width + 0.2:      # 筒の幅（切れ目の印で外接矩形がやや広がるので、上限だけ見る）
+                        pts = _trace_outline(g, grid, color, [p1, p2], [p1, p2, g.segs[k1].a, g.segs[k1].b,
+                                                                         g.segs[k2].a, g.segs[k2].b], set())
+                        out.append(_bbox(pts))
+    return out
 
 
 def _symbol_at(g, grid, P):
@@ -522,7 +602,10 @@ def find_symbols(g, grid, lab):
     P = a['tip']
     hit = _symbol_at(g, grid, P)
     if hit:
-        return [{'box': hit[0], 'color': hit[2], 'shape': hit[1]}], hit[1]
+        syms = [{'box': hit[0], 'color': hit[2], 'shape': hit[1]}]
+        if hit[1] == 'capsule':
+            syms += [{'box': b, 'color': hit[2], 'shape': 'capsule'} for b in continued_capsules(g, grid, hit[0], hit[2])]
+        return syms, hit[1]
     skip = set(lab.get('chain', [])) | set(a.get('heads', ()))
     lines = [k for k in grid.near(P, 0.5) if k not in skip and pt_seg_dist(P, g.segs[k].a, g.segs[k].b) < 0.3]
     # 矢印に垂直な線（シールドの破線・円筒の側面・芯線）を優先
@@ -627,7 +710,7 @@ def axis_rects(g, min_size=2.0, max_size=80.0):
 
 
 NARROW_MAX = 15.0      # 細長い枠の短辺の上限
-NARROW_LONG_MAX = 250.0  # 細長い枠の長辺の上限
+NARROW_LONG_MAX = 350.0  # 細長い枠の長辺の上限
 
 
 def narrow_rects(g, min_size=2.0, short_max=NARROW_MAX, long_max=NARROW_LONG_MAX, plain_max=60.0):
@@ -730,7 +813,9 @@ def terminal_at(g, rects, E, wire_dir, narrow=()):
                 cands.append((x0 - t.x1, t))
     name_pt, name_t = None, None
     if cands:
-        nt = min(cands, key=lambda c: c[0])[1]
+        # 枠からの距離が同じなら、枠の中心に近い文字（`INPUT` の枠の上に `INPUT` と `CP(25A)` が並ぶ図面）
+        centre = (lambda t: abs(t.cx - (x0 + x1) / 2)) if horiz else (lambda t: abs(t.cy - (y0 + y1) / 2))
+        nt = min(cands, key=lambda c: (round(c[0], 1), centre(c[1])))[1]
         name, name_pt, name_t = nt.s, (nt.cx, nt.cy), nt
     return {'rect': r, 'pin': pin, 'connector': name, 'kind': 'box', 'name_pt': name_pt, 'pin_t': pin_t, 'name_t': name_t}
 
@@ -968,6 +1053,176 @@ def device_names(g, grid, rects, term, E, max_box=150.0):
     return out
 
 
+# ---------------------------------------------------------------- ケーブル記号のシールド（破線）
+
+SHIELD_END_TOL = 1.5     # 破線の端が記号の端（長い向きの両端の中心）に着いたとみなす距離
+
+
+def find_shield(g, grid, box):
+    """楕円・長円のケーブル記号の長い向きの両端から、同じ直線上に伸びる破線（シールド）と、その先の閉じた楕円を返す。
+
+    シールドの破線は、記号の上下（縦長なら。横長なら左右）の端から出て、隙間 6 以内でつながり、反対側のシールドの端の楕円に着く
+    （EE6892-611-01B の M65232）。芯線そのものが破線の図面（610-01B の ACCESSORY CABLE）は、破線が記号の端ではなく中心を通るので対象外。
+    接地記号・文字は含めない。
+    Returns: {'lines': [[(始点), (終点)], ...], 'ellipses': [(x0, y0, x1, y1), ...]} または None。"""
+    x0, y0, x1, y1 = box
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    vertical = (y1 - y0) >= (x1 - x0)
+    ends = [(cx, y0), (cx, y1)] if vertical else [(x0, cy), (x1, cy)]
+    lines, ellipses, seen = [], [], set()
+    for k, s in enumerate(g.segs):
+        if not is_dashed(s):
+            continue
+        if abs(s.a[1] - s.b[1]) < 0.05 if vertical else abs(s.a[0] - s.b[0]) < 0.05:
+            pass
+        else:
+            continue
+        near = min((s.a, s.b), key=lambda p: min(math.dist(p, e) for e in ends))
+        if min(math.dist(near, e) for e in ends) > SHIELD_END_TOL:
+            continue
+        e0, e1 = _collinear_run(g, grid, k)
+        key = (round(e0[0], 1), round(e0[1], 1), round(e1[0], 1), round(e1[1], 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        far = max((e0, e1), key=lambda p: min(math.dist(p, e) for e in ends))
+        for c in g.curves:
+            if c.kind == 'ELLIPSE' and c.closed and min(math.dist(far, q) for q in c.pts) < SHIELD_END_TOL:
+                lines.append([tuple(e0), tuple(e1)])
+                ellipses.append(_bbox(c.pts))
+                break
+    if not lines:
+        return None
+    return {'lines': lines, 'ellipses': list(dict.fromkeys(ellipses))}
+
+
+# ---------------------------------------------------------------- コネクタ・端子で途切れた枠（ユニットの枠）
+
+GAP_FRAME_MIN = 8.0       # 途切れた枠として認める辺の下限
+GAP_FRAME_MAX = 150.0     # 同上限（機器の箱と同じ）
+GAP_FRAME_TOL = 0.6       # 辺の位置・端のずれの許容
+GAP_STEP = 1.5            # 隙間を埋める部品どうしの間の小さな空き（部品の枠と文字の間）の許容
+GAP_CIRCLE_MAX = 6.0      # 隙間を埋める端子円の直径の上限（RF IN の円は 4.5）
+GAP_NAME_DIST = 8.0       # 枠の名称候補にする文字の、枠の辺からの距離の上限
+
+
+def _axis_lines(g):
+    """軸に平行な線分を (横 [(y, x0, x1)], 縦 [(x, y0, y1)]) にする（破線は除く）。"""
+    hs, vs = [], []
+    for s in g.segs:
+        if is_dashed(s):
+            continue
+        if abs(s.a[1] - s.b[1]) < 0.02:
+            hs.append((round((s.a[1] + s.b[1]) / 2, 2), min(s.a[0], s.b[0]), max(s.a[0], s.b[0])))
+        elif abs(s.a[0] - s.b[0]) < 0.02:
+            vs.append((round((s.a[0] + s.b[0]) / 2, 2), min(s.a[1], s.b[1]), max(s.a[1], s.b[1])))
+    return hs, vs
+
+
+def _merge_over_devices(lines, spans):
+    """同じ直線上の線分をつなぐ。つなぐのは、触れている・重なっているとき、または隙間が部品（コネクタ枠・端子円）で覆われているとき。
+
+    lines: [(レベル, 始点, 終点)]。spans(level) は、そのレベルの線を覆う部品の [(始点, 終点)]。
+    Returns: [(レベル, 始点, 終点, 部品で橋渡ししたか)]"""
+    by_level = {}
+    for lv, a, b in lines:
+        by_level.setdefault(round(lv, 1), []).append((a, b))
+    out = []
+    for lv, items in by_level.items():
+        items.sort()
+        dev = spans(lv)
+        cur_a, cur_b, bridged = items[0][0], items[0][1], False
+        for a, b in items[1:]:
+            if a <= cur_b + 0.3:
+                cur_b = max(cur_b, b)
+                continue
+            # 隙間 [cur_b, a] が部品の範囲だけで埋まるか
+            pos, ok = cur_b, True
+            while pos < a - GAP_STEP and ok:
+                nxt = [e for (d0, d1) in dev for e in (d1,) if d0 <= pos + GAP_STEP and d1 > pos + 0.3]
+                if nxt:
+                    pos = max(nxt)
+                else:
+                    ok = False
+            if ok:
+                cur_b, bridged = max(cur_b, b), True
+            else:
+                out.append((lv, cur_a, cur_b, bridged))
+                cur_a, cur_b, bridged = a, b, False
+        out.append((lv, cur_a, cur_b, bridged))
+    return out
+
+
+def gapped_frame_regions(g, known_regions=()):
+    """コネクタ枠・端子円で辺が途切れたユニットの枠を、領域（名称候補つき）として返す。
+
+    領域抽出（DXF-extract-labels 由来）は、辺の途中が円（端子）で途切れた枠を閉じた領域にしない（配線ループを除くため）。また
+    長方形の部品で途切れた辺の橋渡しは横線だけ。ユニットの枠がコネクタや端子の円に重なって描かれる図（EE6892-611-01B の
+    `MBX2 R1`）では、領域も機器の箱も見つからず、ユニットが読めない。ここでは、辺の隙間が部品・コネクタ名の文字だけで埋まるときに限って、枠を閉じた矩形とする。
+    部品で橋渡しした辺が1本もない（途切れのない）矩形は、機器の箱（`axis_rects`）と区別がつかないので返さない。
+    名称候補は、枠の中にあり枠の辺から GAP_NAME_DIST 以内で、部品の枠の中でない領域名候補の文字（辺に近い順。1行目）。
+    Returns: 領域の dict（`polygon`・`area`・`name_candidates`）のリスト。`known_regions` と外接矩形が同じものは除く。
+    """
+    devices = list(axis_rects(g, 2.0, 60.0))
+    for c in g.curves:
+        if c.kind == 'CIRCLE' and max(c.size) <= GAP_CIRCLE_MAX:
+            devices.append((c.center[0] - c.size[0] / 2, c.center[1] - c.size[1] / 2,
+                            c.center[0] + c.size[0] / 2, c.center[1] + c.size[1] / 2))
+    # 辺の隙間を埋めるのは、部品（コネクタ枠・端子円）のほか、辺に載ったコネクタ名の文字（`AMC`）
+    covers = devices + [(t.x0 - 0.3, t.y0 - 0.3, t.x1 + 0.3, t.y1 + 0.3) for t in g.txts if t.y1 - t.y0 <= 8 and t.x1 - t.x0 <= 40]
+    hs, vs = _axis_lines(g)
+    h_spans = lambda y: [(r[0], r[2]) for r in covers if r[1] - 0.5 <= y <= r[3] + 0.5]   # noqa: E731
+    v_spans = lambda x: [(r[1], r[3]) for r in covers if r[0] - 0.5 <= x <= r[2] + 0.5]   # noqa: E731
+    H = [h for h in _merge_over_devices(hs, h_spans) if GAP_FRAME_MIN <= h[2] - h[1] <= GAP_FRAME_MAX]
+    V = [v for v in _merge_over_devices(vs, v_spans) if GAP_FRAME_MIN <= v[2] - v[1] <= GAP_FRAME_MAX]
+    tol = GAP_FRAME_TOL
+    h_by = {}
+    for h in H:
+        h_by.setdefault((round(h[1]), round(h[2])), []).append(h)
+    v_at = {}
+    for v in V:
+        v_at.setdefault(round(v[0]), []).append(v)
+
+    def vside(x, y0, y1):
+        for key in (round(x) - 1, round(x), round(x) + 1):
+            for v in v_at.get(key, ()):
+                if abs(v[0] - x) <= tol and v[1] <= y0 + tol and v[2] >= y1 - tol:
+                    return v
+        return None
+
+    frames = {}
+    for h in H:
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for h2 in h_by.get((round(h[1]) + dx, round(h[2]) + dy), ()):
+                    if h2[0] - h[0] < GAP_FRAME_MIN or h2[0] - h[0] > GAP_FRAME_MAX:
+                        continue
+                    if abs(h[1] - h2[1]) > tol or abs(h[2] - h2[2]) > tol:
+                        continue
+                    x0, x1, y0, y1 = (h[1] + h2[1]) / 2, (h[2] + h2[2]) / 2, h[0], h2[0]
+                    left, right = vside(x0, y0, y1), vside(x1, y0, y1)
+                    if left and right and (h[3] or h2[3] or left[3] or right[3]):
+                        frames[(round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1))] = (x0, y0, x1, y1)
+    known = [_bbox(r['polygon']) for r in known_regions if len(r.get('polygon') or []) >= 3]
+    out = []
+    for (x0, y0, x1, y1) in sorted(frames.values()):
+        if any(max(abs(a - b) for a, b in zip(k, (x0, y0, x1, y1))) <= 1.0 for k in known):
+            continue
+        cands = []
+        for t in g.txts:
+            if not (x0 < t.cx < x1 and y0 < t.cy < y1):
+                continue
+            d = min(t.cx - x0, x1 - t.cx, t.cy - y0, y1 - t.cy)
+            first = t.s.split('\n')[0].strip()
+            if d <= GAP_NAME_DIST and first and classify_label(first) == REGION_NAME \
+                    and not any(r[0] <= t.cx <= r[2] and r[1] <= t.cy <= r[3] for r in devices):
+                cands.append((round(d, 2), first))
+        if cands:
+            out.append({'polygon': [(x0, y0), (x1, y0), (x1, y1), (x0, y1)], 'area': (x1 - x0) * (y1 - y0),
+                        'name_candidates': sorted(set(cands))})
+    return out
+
+
 # ---------------------------------------------------------------- 1枚の 405 を読む
 
 REGION_CFG = {**DEFAULT_REGION_CONFIG, 'detect_minor_regions': True, 'local_rotation': True}
@@ -1151,6 +1406,7 @@ def analyze_schematic(path, name):
     except Exception as e:  # noqa: BLE001 - 領域が取れなくても、機器・近傍の根拠で判定できる
         out['region_error'] = f'{type(e).__name__}: {e}'
         regions = []
+    regions += gapped_frame_regions(g, regions)      # コネクタ・端子で辺が途切れたユニットの枠（領域抽出が閉じない）
 
     grid = Grid(g.segs)
     rects = axis_rects(g, 2.0, 60.0)             # コネクタ枠・端子台
@@ -1196,6 +1452,14 @@ def analyze_schematic(path, name):
                 wl = wire_label_texts(g, k, box)
                 wires.append({'labels': [t.s for t in wl], 'ends': ends, '_label_refs': [t.ref for t in wl],
                               '_path': _segs_of(g, path_all)})
+        shield = None
+        if how in ('ellipse', 'capsule'):
+            for sym in symbols:
+                if 'box' in sym:
+                    shield = find_shield(g, grid, sym['box'])
+                    if shield:
+                        break
         out['occurrences'].append({'cable': lab['cable'], 'remark': lab['remark'], 'how': how, 'wires': wires,
-                                   '_label_ref': lab['txt'].ref, '_leader': leader, '_symbols': sym_shapes})
+                                   '_label_ref': lab['txt'].ref, '_leader': leader, '_symbols': sym_shapes, '_shield': shield,
+                                   '_remark_ref': ((lab['remark_txt'].s.split('\n')[0], lab['remark_txt'].ref) if lab.get('remark_txt') else None)})
     return out

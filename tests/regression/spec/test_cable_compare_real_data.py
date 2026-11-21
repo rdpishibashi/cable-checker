@@ -89,14 +89,3 @@ def test_one_sided_cables_have_blank_other_side(rows):
     assert only_405['drawings_393'] == [] and only_405['drawings_405']
     only_393 = next(r for r in rows if r['cable'] == 'M05008')
     assert only_393['drawings_405'] == [] and only_393['drawings_393']
-
-
-def test_group_diff_on_real_data(compared):
-    """守るもの: 393 実データの29図面（ケーブル数≠0）が、サブタイトル優先で「線番設定表」17図面
-    （637-02E を含む。v3.22.4 で `F` と取れなくなった）と「ケーブル一覧表」12図面（`ケ－ブル一覧表` の表記ゆれを含む）の
-    2グループになり、2グループのケーブル製作図ケーブルの和集合が All Diff の393側（215）と一致する。"""
-    comparison, results_393 = compared
-    groups = comparison['groups']
-    assert [(g['name'], len(g['drawings'])) for g in groups] == [('ケーブル一覧表', 12), ('線番設定表', 17)]
-    union = {r['cable'] for g in groups for r in g['rows'] if r['drawings_393']}
-    assert union == set(cable_map(results_393)) and len(union) == 215

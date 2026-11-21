@@ -49,12 +49,12 @@ EXPECTED_DISTRIBUTION = {
     '図面の対応｜製作図': (133, 0, 1, 0, 94),
     '図面の対応｜線番設定表': (38, 0, 2, 0, 188),
     '図面の対応｜展開接続図': (119, 0, 15, 0, 94),
-    '端末1｜ユニット': (41, 37, 17, 22, 111),
-    '端末1｜モジュール': (2, 0, 0, 13, 213),
+    '端末1｜ユニット': (42, 37, 16, 22, 111),
+    '端末1｜モジュール': (3, 0, 0, 13, 212),
     '端末1｜機器符号': (100, 0, 12, 17, 99),
     '端末1｜部品種別': (15, 0, 118, 0, 95),
-    '端末2｜ユニット': (43, 23, 15, 22, 125),
-    '端末2｜モジュール': (4, 0, 0, 12, 212),
+    '端末2｜ユニット': (51, 23, 7, 22, 125),
+    '端末2｜モジュール': (6, 0, 0, 12, 210),
     '端末2｜機器符号': (85, 0, 10, 18, 115),
     '端末2｜部品種別': (17, 0, 104, 0, 107),
     'ケーブル｜種類': (28, 0, 101, 0, 99),
@@ -314,11 +314,12 @@ def test_tall_connector_frames_are_read_as_terminals_m74001(result):
     """守るもの（ユーザー報告: 展開接続図 EE6888-604-01A の M74001 は、細長い四角形のコネクタ CNESCD・CN1 に芯線が接しているのに端末が
     読めず、機器符号・PIN が ？ だった）: 幅 9 × 高さ約 175 の細長い枠（連絡枠の上限 60 超）を、芯線に直交する向きに限って端末として読む。
     機器符号 CNESCD・CN1 と、枠の中の数字（PIN）が製作図 EE3298-509-02C の PIN と15本とも合う。端末1のユニット SYSTEM I/F BOX は領域で ○。
-    端末2のユニット ESC BOX は、枠が閉じていない（右辺に欠け）ため領域に取れず ×（残る課題）。"""
+    端末2のユニット ESC BOX も領域で ○（共有の領域検出が、端子の円が載る隙間・境界を既定で妨げなくなった。DXF-extract-labels v3.24.0。
+    それまでは枠が閉じず領域に取れず ×だった）。"""
     row = row_of(result, 'M74001')
     cells = row['cells']
     assert (cells['端末1｜機器符号'], cells['端末2｜機器符号'], cells['芯線｜PIN']) == ('○', '○', '○')
-    assert (cells['端末1｜ユニット'], cells['端末2｜ユニット']) == ('○', '×')
+    assert (cells['端末1｜ユニット'], cells['端末2｜ユニット']) == ('○', '○')
     assert '15/15 本' in basis(result, row, '芯線｜PIN')
     occ = [o for d in result['drawings'] if d['drawing_number'] == 'EE6888-604-01A' for o in d['schematic']['occurrences'] if o['cable'] == 'M74001']
     assert [(w['ends']['-']['name'], w['ends']['+']['name']) for o in occ for w in o['wires']].count(('CNESCD', 'CN1')) == 15
@@ -327,11 +328,11 @@ def test_tall_connector_frames_are_read_as_terminals_m74001(result):
 def test_connector_circles_on_the_wire_are_the_ends_m74003_to_m74006(result):
     """守るもの（ユーザー報告: 展開接続図 EE6888-604-01A の M74003〜M74006 は、右の端末 CNHVA+・CNVA+・CNVA-・CNHVA- が読めず、先の TB1 が端末になって
     不整合だった）: コネクタ円は直径 3.98（端子円の上限 4.2 以内）で、M74006 では円が HV- から TB1 まで続く1本の線の途中に載る（記号から外へ最初の
-    端子円で止める）。左右の機器符号が一覧表と合って ○。端末1 のユニット（SHIELD BOX）は、辺が端子円・コネクタ名で途切れた枠を領域にして ○。端末2（ESC BOX）は領域に取れず ×（残る課題。M74006 の △ は誤った円の根拠だった）。"""
+    端子円で止める）。左右の機器符号が一覧表と合って ○。端末1 のユニット（SHIELD BOX）は、辺が端子円・コネクタ名で途切れた枠を領域にして ○。端末2（ESC BOX）も領域で ○（DXF-extract-labels v3.24.0 で共有の領域検出が ESC BOX を取れるようになった。それまでは ×。M74006 の △ は誤った円の根拠だった）。"""
     for cable in ('M74003', 'M74004', 'M74005', 'M74006'):
         cells = row_of(result, cable)['cells']
         assert (cells['端末1｜機器符号'], cells['端末2｜機器符号']) == ('○', '○'), cable
-        assert (cells['端末1｜ユニット'], cells['端末2｜ユニット']) == ('○', '×'), cable
+        assert (cells['端末1｜ユニット'], cells['端末2｜ユニット']) == ('○', '○'), cable
     names = {w['ends'][s]['name'] for d in result['drawings'] if d['drawing_number'] == 'EE6888-604-01A'
              for o in d['schematic']['occurrences'] if o['cable'] == 'M74006' for w in o['wires'] for s in '-+' if s in w['ends']}
     assert {'CNHV-', 'CNHVA-'} <= names

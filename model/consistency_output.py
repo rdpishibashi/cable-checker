@@ -2,7 +2,7 @@
 
 シート構成: `Summary`（項目ごとの記号の件数と、図面・ケーブル番号の件数）→ `記号の説明`（記号・項目の判定条件・根拠の語。`legend.py`）→
 `図面一覧`（抽出した図面）→ `図面の関係`（展開接続図ごとの関連する一覧表・線番設定表・製作図）→ `ケーブル抽出`（ケーブル番号）→
-`All Diff`・`<グループ名> Diff`（ケーブル番号の比較。展開接続図と製作図の図番を並べる）→ `整合性チェック`（1ケーブル1行＝一覧表の行。項目のセルは
+`ケーブル記載図面`（ケーブルごとに、記載している展開接続図・一覧表・線番設定表・製作図の図番。行の区分で色分け）→ `整合性チェック`（1ケーブル1行＝一覧表の行。項目のセルは
 記号で、照合明細の該当行へのリンク）→ `照合明細`（セルごとの根拠）→ `芯線照合`（線番接続IDごとの線番・PIN・色）→
 `展開接続図`・`ケーブル一覧表`・`線番設定表`・`製作図の接続表`（読み取った明細）→ `製作図の文字`・`図番パターン照合`（根拠）。
 画面の「分析結果プレビュー」と Excel は同じ `preview_sheets()` から作る（別実装にしない）。
@@ -14,10 +14,9 @@ import io
 import pandas as pd
 
 from . import cable_list_table, legend
-from .compare_output import (ALL_SHEET, compare_frame, count_rows, group_sheet_names, status_formats,
-                             write_compare_sheet)
+from .cable_compare import count_rows
 from .consistency import (ITEM_COLUMNS, ITEMS, KIND_FAB, KIND_LIST, KIND_SCHEMATIC, KIND_WIRE, NA, SEP, SET_393,
-                          SET_405, SYMBOLS, drawing_relations, fab_text_rows, pattern_resolutions)
+                          SET_405, SYMBOLS, drawing_relations, fab_drawings_by_cable, fab_text_rows, pattern_resolutions)
 from .cell_values import codes as _codes, values as _values
 from .excel_output import display_width
 from .symbols import EXCEL_COLORS, VIEWER_COLORS
@@ -34,18 +33,28 @@ LEGEND_SHEET = '記号の説明'
 RELATION_SHEET = '図面の関係'
 RELATION_COLUMNS = ['展開接続図', 'ケーブル一覧表', '線番設定表', 'ケーブル製作図']
 EXTRACT_SHEET = 'ケーブル抽出'
+CABLE_DRAWINGS_SHEET = 'ケーブル記載図面'
 LIST_SHEET = 'ケーブル一覧表'
 WIRE_SHEET = '線番設定表'
 CONN_SHEET = '製作図の接続表'
 SCHEMATIC_SHEET = '展開接続図'
 PATTERN_SHEET = '図番パターン照合'
 TEXT_SHEET = '製作図の文字'
-# 固定のシート（並び順）。`All Diff` と `<グループ名> Diff` は `ケーブル抽出` の後ろ、`整合性チェック` の前に入る
-FIXED_SHEET_NAMES = [SUMMARY_SHEET, LEGEND_SHEET, INDEX_SHEET, RELATION_SHEET, EXTRACT_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, SCHEMATIC_SHEET,
+# シートの並び順
+FIXED_SHEET_NAMES = [SUMMARY_SHEET, LEGEND_SHEET, INDEX_SHEET, RELATION_SHEET, EXTRACT_SHEET, CABLE_DRAWINGS_SHEET, CHECK_SHEET, DETAIL_SHEET, WIRE_CHECK_SHEET, SCHEMATIC_SHEET,
                      LIST_SHEET, WIRE_SHEET, CONN_SHEET, TEXT_SHEET, PATTERN_SHEET]
-SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル製作図（393）'}
+SET_LABELS = {SET_405: '展開接続図（405）', SET_393: 'ケーブル図（393）'}
 INDEX_COLUMNS = ['セット', '図番', 'タイトル', 'サブタイトル', '図面の種類', 'ケーブル数', '備考']
-EXTRACT_COLUMNS = ['セット', '図番', 'ケーブル番号', '備考']
+EXTRACT_COLUMNS = ['ケーブル番号', '備考', '図番', '図面種別', 'タイトル', 'サブタイトル']
+CABLE_DRAWINGS_COLUMNS = ['ケーブル番号', KIND_SCHEMATIC, KIND_LIST, KIND_WIRE, KIND_FAB]
+# 「ケーブル記載図面」の行の区分 → セルの色（背景, 文字）。薄い配色（Tools/CLAUDE.md の Excel Output Pattern）
+CABLE_ONLY_405, CABLE_WITH_405, CABLE_NO_405, CABLE_ALL = '405only', 'with405', 'no405', 'all'
+CABLE_STATUS_COLORS = {
+    CABLE_ONLY_405: ('#FEF1F5', '#9C0006'),     # 展開接続図だけ＝ピンク
+    CABLE_WITH_405: ('#EAF1FB', '#1F4E79'),     # 展開接続図と、ほかの図面のどれか＝青（展開接続図と存在している図面のセル）
+    CABLE_NO_405: ('#FFF6D5', '#9C6500'),       # 展開接続図が無く、ほかの図面のどれか＝黄（存在している図面のセル）
+    CABLE_ALL: ('#EAF7EC', '#006100'),          # すべて揃っている＝緑
+}
 
 SUMMARY_COLUMNS = ['項目', *SYMBOLS, '件数']
 CHECK_KEYS = ['ケーブル番号', '一覧表の図番', '一覧表の行', '不整合数', '要確認数']
@@ -86,10 +95,10 @@ def _cable_count_rows(rows):
     counts = count_rows(rows)
     return [
         ('ケーブル番号: 展開接続図', counts['405only'] + counts['both']),
-        ('ケーブル番号: ケーブル製作図', counts['393only'] + counts['both']),
+        ('ケーブル番号: ケーブル図', counts['393only'] + counts['both']),
         ('ケーブル番号: 両方にある', counts['both']),
         ('ケーブル番号: 展開接続図だけ', counts['405only']),
-        ('ケーブル番号: ケーブル製作図だけ', counts['393only']),
+        ('ケーブル番号: ケーブル図だけ', counts['393only']),
     ]
 
 
@@ -110,7 +119,7 @@ def summary_frame(result):
         ('図面: 照合に使っていない図面', len(result['unused'])),
         ('図面: 全体', len(drawings)),
         ('図面: 展開接続図（405）のセット', sum(d['set'] == SET_405 for d in drawings)),
-        ('図面: ケーブル製作図（393）のセット', sum(d['set'] == SET_393 for d in drawings)),
+        ('図面: ケーブル図（393）のセット', sum(d['set'] == SET_393 for d in drawings)),
         *_cable_count_rows(result['compare']['rows']),
     ]
     rows += [[name, *[None] * len(SYMBOLS), n] for name, n in kinds]
@@ -227,7 +236,7 @@ def text_frame(result):
 
 
 def index_frame(result):
-    """抽出した図面の一覧（展開接続図のセット → ケーブル製作図のセット。それぞれ図番順）。"""
+    """抽出した図面の一覧（展開接続図のセット → ケーブル図のセット。それぞれ図番順）。"""
     unused = set(result['unused'])
     extracts = {(drawing_set, r['drawing_number']): r for drawing_set, results in result['extracts'].items() for r in results}
     rows = []
@@ -241,30 +250,71 @@ def index_frame(result):
 
 
 def extract_frame(result):
-    """抽出したケーブル番号（図番×ケーブル番号×備考。展開接続図のセット → ケーブル製作図のセット）。"""
-    rows = [[SET_LABELS[drawing_set], r['drawing_number'], c['cable'], c['remark']]
-            for drawing_set in (SET_405, SET_393) for r in result['extracts'][drawing_set] for c in r['cables']]
+    """抽出したケーブル番号（ケーブル番号×備考×図番。ケーブル番号→図番の昇順）。図面種別は、405 のセットは「展開接続図」、393 のセットは読み取った種類
+    （ケーブル一覧表・線番設定表・ケーブル製作図。複数なら `、` 区切り）。タイトル・サブタイトルは図面のもの。"""
+    kinds = {d['drawing_number']: d['kinds'] for d in result['drawings']}
+    rows = []
+    for drawing_set in (SET_405, SET_393):
+        for r in result['extracts'][drawing_set]:
+            kind = KIND_SCHEMATIC if drawing_set == SET_405 else '、'.join(kinds.get(r['drawing_number'], []))
+            rows += [[c['cable'], c['remark'], r['drawing_number'], kind, r['title'], r['subtitle']] for c in r['cables']]
+    rows.sort(key=lambda x: (x[0], x[2], x[1]))
     return pd.DataFrame(rows, columns=EXTRACT_COLUMNS)
 
 
-def sheet_plan(result):
-    """出力する全シートを Excel と同じ順で `[(シート名, DataFrame, 比較の行 または None), ...]` にする。
+def cable_drawing_rows(result):
+    """ケーブルごとに、そのケーブルが記載されている図面。
 
-    `All Diff` と `<グループ名> Diff` は第3要素に比較の行（`compare_cables()` の結果）を持つ（Excel では行を区分で色分けして書く）。
+    Returns: [{'cable', 'drawings': {列名: [図番…]}, 'status'}]（ケーブル番号の昇順）。列は 展開接続図（405 の抽出でそのケーブル番号がある図面）・
+    ケーブル一覧表・線番設定表（393 の抽出でそのケーブル番号がある図面の種類）・ケーブル製作図（一覧表の製作図パターンが当たった製作図。製作図には
+    ケーブル番号が書かれていないので、一覧表経由。ケーブル番号が書かれた製作図があればそれも）。
+    status: 展開接続図だけ＝405only／展開接続図とほかのどれか＝with405／展開接続図が無くほかのどれか＝no405／4つすべて＝all。"""
+    kinds = {d['drawing_number']: d['kinds'] for d in result['drawings']}
+    column_of = {KIND_LIST: KIND_LIST, KIND_WIRE: KIND_WIRE, KIND_FAB: KIND_FAB}
+    cables = {}
+
+    def slot(cable):
+        return cables.setdefault(cable, {c: set() for c in CABLE_DRAWINGS_COLUMNS[1:]})
+    for r in result['extracts'][SET_405]:
+        for c in r['cables']:
+            slot(c['cable'])[KIND_SCHEMATIC].add(r['drawing_number'])
+    for r in result['extracts'][SET_393]:
+        for c in r['cables']:
+            for kind in kinds.get(r['drawing_number'], []):
+                if kind in column_of:
+                    slot(c['cable'])[column_of[kind]].add(r['drawing_number'])
+    for cable, names in fab_drawings_by_cable(result['drawings']).items():
+        if cable in cables:
+            cables[cable][KIND_FAB].update(names)
+    rows = []
+    for cable in sorted(cables):
+        found = cables[cable]
+        others = [found[k] for k in (KIND_LIST, KIND_WIRE, KIND_FAB)]
+        if found[KIND_SCHEMATIC] and all(others):
+            status = CABLE_ALL
+        elif found[KIND_SCHEMATIC]:
+            status = CABLE_WITH_405 if any(others) else CABLE_ONLY_405
+        else:
+            status = CABLE_NO_405
+        rows.append({'cable': cable, 'drawings': {k: sorted(v) for k, v in found.items()}, 'status': status})
+    return rows
+
+
+def cable_drawings_frame(result):
+    rows = [[r['cable'], *('、'.join(r['drawings'][k]) for k in CABLE_DRAWINGS_COLUMNS[1:])] for r in cable_drawing_rows(result)]
+    return pd.DataFrame(rows, columns=CABLE_DRAWINGS_COLUMNS)
+
+
+def sheet_plan(result):
+    """出力する全シートを Excel と同じ順で `[(シート名, DataFrame, 色分けの行 または None), ...]` にする。
+
+    `ケーブル記載図面` は第3要素に `cable_drawing_rows()` を持つ（Excel では行の区分でセルを色分けして書く）。
     """
-    compare = result['compare']
-    group_names = group_sheet_names([g['name'] for g in compare['groups']], reserved=FIXED_SHEET_NAMES)
     frames = {SUMMARY_SHEET: summary_frame, LEGEND_SHEET: legend_frame, RELATION_SHEET: relation_frame, CHECK_SHEET: check_frame, DETAIL_SHEET: detail_frame,
-              WIRE_CHECK_SHEET: wire_check_frame, INDEX_SHEET: index_frame, EXTRACT_SHEET: extract_frame,
+              WIRE_CHECK_SHEET: wire_check_frame, INDEX_SHEET: index_frame, EXTRACT_SHEET: extract_frame, CABLE_DRAWINGS_SHEET: cable_drawings_frame,
               LIST_SHEET: list_frame, WIRE_SHEET: wire_frame, CONN_SHEET: conn_frame, SCHEMATIC_SHEET: schematic_frame,
               PATTERN_SHEET: pattern_frame, TEXT_SHEET: text_frame}
-    compare_sheets = [(ALL_SHEET, compare['rows'])] + [(n, g['rows']) for n, g in zip(group_names, compare['groups'])]
-    plan = []
-    for name in FIXED_SHEET_NAMES:
-        plan.append((name, frames[name](result), None))
-        if name == EXTRACT_SHEET:
-            plan += [(sheet, compare_frame(rows), rows) for sheet, rows in compare_sheets]
-    return plan
+    return [(name, frames[name](result), cable_drawing_rows(result) if name == CABLE_DRAWINGS_SHEET else None) for name in FIXED_SHEET_NAMES]
 
 
 def preview_sheets(result):
@@ -283,15 +333,15 @@ def build_workbook(result):
         sym_fmts = {s: book.add_format({'bg_color': bg, 'font_color': fg, 'align': 'center'}) for s, (bg, fg) in SYMBOL_COLORS.items()}
         sym_fmts[NA] = book.add_format({'align': 'center'})
         row_fmts = {s: book.add_format({'bg_color': bg, 'font_color': fg}) for s, (bg, fg) in SYMBOL_COLORS.items()}
-        compare_fmts = status_formats(book)
+        cable_fmts = {k: book.add_format({'bg_color': bg, 'font_color': fg}) for k, (bg, fg) in CABLE_STATUS_COLORS.items()}
         viewer_fmts = {k: book.add_format({'bg_color': c, 'font_color': '#000000', 'align': 'center'})
                        for k, c in VIEWER_COLORS.items() if k in SYMBOLS}
-        for name, frame, compare_rows in sheet_plan(result):
+        for name, frame, cable_rows in sheet_plan(result):
             if name == CHECK_SHEET:
                 _write_check_sheet(writer, result, frame, header_fmt, sym_fmts)
                 continue
-            if compare_rows is not None:
-                write_compare_sheet(writer, name, compare_rows, header_fmt, compare_fmts)
+            if cable_rows is not None:
+                _write_cable_drawings_sheet(writer, frame, cable_rows, header_fmt, cable_fmts)
                 continue
             frame.to_excel(writer, sheet_name=name, index=False)
             ws = writer.sheets[name]
@@ -321,6 +371,24 @@ def build_workbook(result):
             if len(frame):
                 ws.autofilter(0, 0, len(frame), len(frame.columns) - 1)
     return output.getvalue()
+
+
+def _write_cable_drawings_sheet(writer, frame, rows, header_fmt, fmts):
+    """ケーブル記載図面: 行の区分でセルを色分けする。ピンク＝展開接続図だけ（展開接続図のセット）、青＝展開接続図と存在しているほかの図面のセル、
+    黄＝展開接続図が無く存在している図面のセル、緑＝すべて揃っている。ケーブル番号のセルも行の区分の色。値の無いセルは色なし。"""
+    name = CABLE_DRAWINGS_SHEET
+    frame.to_excel(writer, sheet_name=name, index=False)
+    ws = writer.sheets[name]
+    for col, column in enumerate(frame.columns):
+        ws.write(0, col, column, header_fmt)
+        ws.set_column(col, col, min(max(display_width(str(v)) for v in [column, *frame[column]]) + 2, 60))
+    for i, (r, values) in enumerate(zip(rows, frame.values.tolist()), start=1):
+        fmt = fmts[r['status']]
+        for col, value in enumerate(values):
+            ws.write(i, col, value, fmt if (col == 0 or value) else None)
+    ws.freeze_panes(1, 1)
+    if len(frame):
+        ws.autofilter(0, 0, len(frame), len(frame.columns) - 1)
 
 
 def _write_check_sheet(writer, result, frame, header_fmt, sym_fmts):

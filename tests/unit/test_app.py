@@ -100,25 +100,25 @@ def both_sets(tmp_path):
 # ---------------------------------------------------------------- 入力
 
 def test_page_is_a_single_screen_with_two_uploaders_side_by_side():
-    """守るもの: タブは無く、405 と 393 のアップローダーが別のキーで並ぶ（どちらもフォルダ・複数可）。ファイルが無ければ案内だけでボタンは出さない。"""
+    """守るもの: タブは無く、405 と 393 のアップローダーが別のキーで並ぶ（どちらもフォルダ・複数可）。両方にファイルが揃うまでボタンは無効（押せない）で、案内を出す。"""
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception and len(at.tabs) == 0
-    assert [t.value for t in at.title] == ['Cable-checker - 展開接続図・ケーブル製作図の整合性チェック']
+    assert [t.value for t in at.title] == ['Cable-checker - 展開接続図・ケーブル図の整合性チェック']
     assert at.file_uploader(key=U405).label == '展開接続図（405）（複数可，フォルダ可）'
-    assert at.file_uploader(key=U393).label == 'ケーブル製作図（393）（複数可，フォルダ可）'
+    assert at.file_uploader(key=U393).label == 'ケーブル図（393）（複数可，フォルダ可）'
     assert at.file_uploader(key=U405).proto.multiple_files and at.file_uploader(key=U393).proto.multiple_files
     assert any('図番形式' in v for v in values(at.info))
-    assert check_button(at) == []
+    assert all(b.disabled for b in check_button(at)) and len(check_button(at)) == 1
 
 
 @pytest.mark.parametrize('key', [U405, U393])
 def test_non_target_files_are_ignored_and_dwg_gets_a_warning_in_each_set(key):
-    """守るもの: 図番形式でないファイルは無視（件数を出す）、DWG は読めないので名指しで警告。有効0件ならボタンを出さない。"""
+    """守るもの: 図番形式でないファイルは無視（件数を出す）、DWG は読めないので名指しで警告。有効0件ならボタンは無効のまま。"""
     at = AppTest.from_file(APP, default_timeout=30).run()
     for name in ('memo.txt', 'EE1234-405-01A.dwg'):
         at.file_uploader(key=key).upload(name, b'x')
     at.run()
-    assert check_button(at) == []
+    assert all(b.disabled for b in check_button(at))
     assert any('EE1234-405-01A.dwg はDWGファイルのため読み込めません' in v for v in values(at.warning))
     assert any('処理対象 0 件（図番形式でないファイル 1 件は無視）' in v for v in values(at.caption))
 
@@ -131,10 +131,10 @@ def test_duplicate_name_within_a_set_is_skipped_with_warning(tmp_path):
 
 
 def test_same_name_in_both_sets_is_skipped_on_the_393_side(tmp_path):
-    """守るもの: 両方のセットに同じ名前があれば、ケーブル製作図（393）の側をスキップして警告する（展開接続図の側を使う）。"""
+    """守るもの: 両方のセットに同じ名前があれば、ケーブル図（393）の側をスキップして警告する（展開接続図の側を使う）。"""
     data = dxf_bytes(tmp_path, ['W No.M39001'])
     at = run_app([('EE1234-405-01A.dxf', data)], [('EE1234-405-01A.dxf', data), ('EE1234-339-01A.dxf', data)])
-    assert any('EE1234-405-01A.dxf は展開接続図（405）に同じ名前があるため、ケーブル製作図（393）の側をスキップしました' in v
+    assert any('EE1234-405-01A.dxf は展開接続図（405）に同じ名前があるため、ケーブル図（393）の側をスキップしました' in v
                for v in values(at.warning))
     run_check_click(at)
     result = at.session_state['check_result']['result']
@@ -144,30 +144,47 @@ def test_same_name_in_both_sets_is_skipped_on_the_393_side(tmp_path):
 
 # ---------------------------------------------------------------- 実行と結果
 
-def test_405_set_alone_runs_extraction_and_comparison(tmp_path):
-    """守るもの: 展開接続図のセットだけでも実行できる。一覧表が無いので整合性チェックの行は0、ケーブル番号は「展開接続図だけ」として比較に出る。"""
-    at = run_app([(SCH_NAME, dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61']))])
+def filler_393(tmp_path):
+    """393 のセットを埋めるだけの、ケーブル番号も表も無い図面（片方だけではボタンが無効なので、もう一方を埋める）。"""
+    return [('EE0099-339-99A.dxf', dxf_bytes(tmp_path, ['dummy']))]
+
+
+@pytest.mark.parametrize('only', [U405, U393])
+def test_check_button_stays_disabled_until_both_sets_have_files(tmp_path, only):
+    """守るもの: 展開接続図（405）とケーブル図（393）の両方にファイルが揃うまで「整合性をチェック」は押せない（片方だけでは実行できない）。
+    アップロード中の欄はまだ空に見えるので、両方の件数が出てから有効になる。"""
+    data = [(SCH_NAME if only == U405 else CHECK_NAME, dxf_bytes(tmp_path, ['W No.M39001']))]
+    at = run_app(data if only == U405 else [], data if only == U393 else [])
+    assert [b.disabled for b in check_button(at)] == [True]
+    assert any('両方にアップロード' in v for v in values(at.info))
+    at.file_uploader(key=U393 if only == U405 else U405).upload('EE0099-339-99A.dxf', dxf_bytes(tmp_path, ['dummy'])).run()
+    assert [b.disabled for b in check_button(at)] == [False]
+
+
+def test_405_set_with_filler_393_runs_extraction_and_comparison(tmp_path):
+    """守るもの: 展開接続図のケーブル番号は、ケーブル図に無ければ「展開接続図だけ」として比較に出る。一覧表が無いので整合性チェックの行は0。"""
+    at = run_app([(SCH_NAME, dxf_bytes(tmp_path, ['W No.M39001', 'W No.M65A61']))], filler_393(tmp_path))
     assert not at.exception and [b.proto.type for b in check_button(at)] == ['primary']
     run_check_click(at)
     assert not at.error
     sheets = at.selectbox(key='preview_sheet_check')
-    assert sheets.options[:7] == ['Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', '整合性チェック']
-    assert any('展開接続図 1 図面・ケーブル製作図 0 図面' in v and 'ケーブル番号 2 件（両方 0・展開接続図だけ 2・ケーブル製作図だけ 0）' in v
+    assert sheets.options[:7] == ['Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'ケーブル記載図面', '整合性チェック']
+    assert any('展開接続図 1 図面・ケーブル図 1 図面' in v and 'ケーブル番号 2 件（両方 0・展開接続図だけ 2・ケーブル図だけ 0）' in v
                and '一覧表の行 0 行' in v for v in values(at.caption))
-    sheets.select('All Diff').run()
-    assert at.dataframe[0].value.values.tolist() == [['M39001', 'EE1234-405-01A', ''], ['M65A61', 'EE1234-405-01A', '']]
+    sheets.select('ケーブル記載図面').run()
+    assert at.dataframe[0].value.values.tolist() == [['M39001', 'EE1234-405-01A', '', '', ''], ['M65A61', 'EE1234-405-01A', '', '', '']]
 
 
-def test_393_set_alone_runs_the_consistency_check_without_schematics(tmp_path):
-    """守るもの: ケーブル製作図のセットだけでも実行できる。展開接続図の列は －、ケーブル番号は「ケーブル製作図だけ」。"""
-    at = run_app([], [(CHECK_NAME, cable_list_dxf_bytes(tmp_path))])
+def test_393_set_with_filler_405_runs_the_consistency_check_without_schematics(tmp_path):
+    """守るもの: 一覧表だけのケーブル図でも、展開接続図の列は －、ケーブル番号は「ケーブル図だけ」。"""
+    at = run_app([('EE0098-405-99A.dxf', dxf_bytes(tmp_path, ['dummy']))], [(CHECK_NAME, cable_list_dxf_bytes(tmp_path))])
     run_check_click(at)
     assert not at.error
     assert any('一覧表の行 2 行（不整合 2 行・要確認 0 行）' in v for v in values(at.caption))
     at.selectbox(key='preview_sheet_check').select('整合性チェック').run()
     frame = at.dataframe[0].value
     assert set(frame['図面の対応｜展開接続図']) == {'－'} and set(frame['ケーブル番号']) == {'M39001', 'M39002'}
-    at.selectbox(key='preview_sheet_check').select('All Diff').run()
+    at.selectbox(key='preview_sheet_check').select('ケーブル記載図面').run()
     assert [r[1] for r in at.dataframe[0].value.values.tolist()] == ['', '']
 
 
@@ -187,7 +204,7 @@ def test_both_sets_check_the_schematic_pointed_at_by_the_list_and_report_unused(
     assert set(at.dataframe[0].value['図番']) == {'EE1234-405-01A'}
     at.selectbox(key='preview_sheet_check').select('図面一覧').run()
     index = at.dataframe[0].value
-    assert index['セット'].tolist() == ['展開接続図（405）', '展開接続図（405）', 'ケーブル製作図（393）']
+    assert index['セット'].tolist() == ['展開接続図（405）', '展開接続図（405）', 'ケーブル図（393）']
     assert index[index['図番'] == 'EE5555-999-09A'].iloc[0]['備考'] == '照合に使っていない'
 
 
@@ -247,7 +264,7 @@ def test_downloaded_excel_has_the_same_sheets_as_the_preview(tmp_path):
     assert [b.proto.label for b in at.download_button] == ['分析結果ダウンロード']
     book = openpyxl.load_workbook(io.BytesIO(at.session_state['check_result']['xlsx']))
     assert book.sheetnames == at.selectbox(key='preview_sheet_check').options
-    assert book.sheetnames[1:7] == ['記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', '（タイトルなし） Diff']
+    assert book.sheetnames[1:7] == ['記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'ケーブル記載図面', '整合性チェック']
 
 
 # ---------------------------------------------------------------- プレビュー
@@ -262,18 +279,6 @@ def test_preview_comes_before_the_download_button_and_stays_open_after_selection
     assert types.index('expander') < types.index('download_button')
     at.selectbox(key='preview_sheet_check').select('ケーブル抽出').run()
     assert at.session_state['preview_expanded_check'] is True
-
-
-def test_preview_resets_to_summary_when_the_sheet_disappears(tmp_path):
-    """守るもの: 入力を差し替えて前回のシート（グループの Diff など）が無くなったら、先頭（Summary）に戻る。"""
-    at = run_app(*both_sets(tmp_path))
-    run_check_click(at)
-    at.selectbox(key='preview_sheet_check').select('（タイトルなし） Diff').run()
-    at.file_uploader(key=U393).upload('EE7777-777-01A.dxf', dxf_bytes(tmp_path, ['ケーブル番号なし']))   # 393 にケーブルが無ければグループの Diff は無い
-    at.run()
-    run_check_click(at)
-    assert '（タイトルなし） Diff' not in at.selectbox(key='preview_sheet_check').options
-    assert at.selectbox(key='preview_sheet_check').value == 'Summary'
 
 
 @pytest.fixture
@@ -387,7 +392,7 @@ def test_related_drawings_listed_from_references_and_opened_in_collapsible_windo
     表示でき、無ければ「アップロードに無い」。Excel の図番パターン照合は変えない。"""
     other = dxf_bytes(tmp_path, ['EE6892-405-08A'])
     at = run_app([('EE6892-405-01A.dxf', schematic_with_reference_bytes(tmp_path, 'to POWER LINE (-405-08) XRLS1 (-405-09)')),
-                  ('EE6892-405-08A.dxf', other)], [])
+                  ('EE6892-405-08A.dxf', other)], filler_393(tmp_path))
     run_check_click(at)
     open_section(at)
     text = '\n'.join(values(at.markdown))
@@ -403,7 +408,7 @@ def test_related_drawings_listed_from_references_and_opened_in_collapsible_windo
 
 def test_no_related_drawings_message_when_the_schematic_has_no_reference(tmp_path, mounted):
     """守るもの: 図中の参照が無い展開接続図では「関連図面はありません」と出る。"""
-    at = run_app([('EE6892-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))], [])
+    at = run_app([('EE6892-405-01A.dxf', dxf_bytes(tmp_path, ['W No.M39001']))], filler_393(tmp_path))
     run_check_click(at)
     open_section(at)
     assert any('関連図面（図中の参照' in c.value and 'ありません' in c.value for c in at.caption)

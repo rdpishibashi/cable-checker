@@ -69,7 +69,7 @@ def read_check_sheet(result):
 def test_sheets_are_in_the_documented_order_and_columns():
     sheets = dict(preview_sheets(make_result()))
     assert list(sheets) == [
-        'Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック', '照合明細',
+        'Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'ケーブル記載図面', '整合性チェック', '照合明細',
         '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']
     assert [n for n in sheets if n in FIXED_SHEET_NAMES] == FIXED_SHEET_NAMES                 # 固定のシートは並びを保つ
     assert list(sheets[out.CHECK_SHEET].columns) == CHECK_COLUMNS == [
@@ -125,11 +125,11 @@ def test_summary_counts_symbols_per_item_and_drawing_kinds():
     assert summary.loc['図面: 文字の無い図面', '件数'] == 0
     assert summary.loc['図面: 照合に使っていない図面', '件数'] == 1
     assert summary.loc['図面: 全体', '件数'] == 5
-    assert summary.loc['図面: 展開接続図（405）のセット', '件数'] == 1 and summary.loc['図面: ケーブル製作図（393）のセット', '件数'] == 4
+    assert summary.loc['図面: 展開接続図（405）のセット', '件数'] == 1 and summary.loc['図面: ケーブル図（393）のセット', '件数'] == 4
     # ケーブル番号の比較: 405 に CABLE・M70001、393 に CABLE・M99999
-    assert summary.loc['ケーブル番号: 展開接続図', '件数'] == 2 and summary.loc['ケーブル番号: ケーブル製作図', '件数'] == 2
+    assert summary.loc['ケーブル番号: 展開接続図', '件数'] == 2 and summary.loc['ケーブル番号: ケーブル図', '件数'] == 2
     assert summary.loc['ケーブル番号: 両方にある', '件数'] == 1
-    assert summary.loc['ケーブル番号: 展開接続図だけ', '件数'] == 1 and summary.loc['ケーブル番号: ケーブル製作図だけ', '件数'] == 1
+    assert summary.loc['ケーブル番号: 展開接続図だけ', '件数'] == 1 and summary.loc['ケーブル番号: ケーブル図だけ', '件数'] == 1
 
 
 # ---------------------------------------------------------------- 整合性チェックシート（Excel）
@@ -234,7 +234,7 @@ def test_evidence_sheets_show_pattern_resolution_and_fab_text():
 # ---------------------------------------------------------------- ケーブル番号の抽出と比較のシート
 
 def test_index_sheet_lists_the_drawings_of_both_sets_with_titles_kinds_and_remarks():
-    """守るもの: 図面一覧は展開接続図のセット → ケーブル製作図のセットの順（それぞれ図番順）で、タイトル・図面の種類・ケーブル数・備考を持つ。"""
+    """守るもの: 図面一覧は展開接続図のセット → ケーブル図のセットの順（それぞれ図番順）で、タイトル・図面の種類・ケーブル数・備考を持つ。"""
     index = dict(preview_sheets(make_result()))[out.INDEX_SHEET]
     assert list(index.columns) == out.INDEX_COLUMNS
     assert index['図番'].tolist() == [SCH_NAME, 'EE0002-002-02A', FAB_NAME, WIRE_NAME, LIST_NAME]
@@ -242,7 +242,7 @@ def test_index_sheet_lists_the_drawings_of_both_sets_with_titles_kinds_and_remar
     assert (sch['セット'], sch['タイトル'], sch['図面の種類'], sch['ケーブル数']) == (
         '展開接続図（405）', 'ELECTRICAL SCHEMATIC DIAGRAM', '展開接続図', 2)
     lst = index[index['図番'] == LIST_NAME].iloc[0]
-    assert (lst['セット'], lst['サブタイトル'], lst['図面の種類'], lst['ケーブル数']) == ('ケーブル製作図（393）', 'ケーブル一覧表', 'ケーブル一覧表', 1)
+    assert (lst['セット'], lst['サブタイトル'], lst['図面の種類'], lst['ケーブル数']) == ('ケーブル図（393）', 'ケーブル一覧表', 'ケーブル一覧表', 1)
     assert index[index['図番'] == 'EE0002-002-02A'].iloc[0]['備考'] == '照合に使っていない'
     assert (index['備考'] == '').sum() == 4
 
@@ -254,38 +254,55 @@ def test_index_sheet_marks_drawings_without_text():
     assert index[index['図番'] == WIRE_NAME].iloc[0]['備考'] == '文字が無い'
 
 
-def test_extract_sheet_lists_every_cable_of_both_sets_with_remarks():
+def test_extract_sheet_lists_every_cable_of_both_sets_with_kind_title_and_subtitle():
+    """守るもの: ケーブル抽出はケーブル番号→図番の順で、列は ケーブル番号・備考・図番・図面種別・タイトル・サブタイトル（セットの列は無い）。
+    図面種別は、405 の図面は展開接続図、393 の図面は読み取った種類。"""
     extract_sheet = dict(preview_sheets(make_result()))[out.EXTRACT_SHEET]
-    assert list(extract_sheet.columns) == out.EXTRACT_COLUMNS
+    assert list(extract_sheet.columns) == out.EXTRACT_COLUMNS == ['ケーブル番号', '備考', '図番', '図面種別', 'タイトル', 'サブタイトル']
     assert extract_sheet.values.tolist() == [
-        ['展開接続図（405）', SCH_NAME, CABLE, f'備考{CABLE}'], ['展開接続図（405）', SCH_NAME, 'M70001', '備考M70001'],
-        ['ケーブル製作図（393）', WIRE_NAME, CABLE, f'備考{CABLE}'], ['ケーブル製作図（393）', WIRE_NAME, 'M99999', '備考M99999'],
-        ['ケーブル製作図（393）', LIST_NAME, CABLE, f'備考{CABLE}']]
+        [CABLE, f'備考{CABLE}', WIRE_NAME, '線番設定表', '線番設定表', ''],
+        [CABLE, f'備考{CABLE}', LIST_NAME, 'ケーブル一覧表', '', 'ケーブル一覧表'],
+        [CABLE, f'備考{CABLE}', SCH_NAME, '展開接続図', 'ELECTRICAL SCHEMATIC DIAGRAM', ''],
+        ['M70001', '備考M70001', SCH_NAME, '展開接続図', 'ELECTRICAL SCHEMATIC DIAGRAM', ''],
+        ['M99999', '備考M99999', WIRE_NAME, '線番設定表', '線番設定表', '']]
 
 
-def test_compare_sheets_are_all_diff_and_one_per_group_after_the_extract_sheet():
-    """守るもの: All Diff と、393 のサブタイトル優先のグループごとの比較シートが、ケーブル抽出のあと・整合性チェックの前に入り、中身は今の比較と同じ列・値。"""
+def test_cable_drawings_sheet_lists_the_drawings_that_carry_each_cable_and_its_fab_drawing_by_pattern():
+    """守るもの: ケーブル記載図面は、ケーブルごとに 展開接続図・ケーブル一覧表・線番設定表・ケーブル製作図の図番を並べる（All Diff・各グループの Diff を統合）。
+    製作図にはケーブル番号が書かれないので、一覧表の製作図パターンが指す図面。ケーブル番号の昇順。"""
     sheets = dict(preview_sheets(make_result()))
-    assert list(sheets)[4:9] == ['ケーブル抽出', 'All Diff', 'ケーブル一覧表 Diff', '線番設定表 Diff', '整合性チェック']
-    assert sheets['All Diff'].values.tolist() == [
-        [CABLE, SCH_NAME, f'{WIRE_NAME}、{LIST_NAME}'], ['M70001', SCH_NAME, ''], ['M99999', '', WIRE_NAME]]
-    assert list(sheets['All Diff'].columns) == ['ケーブル番号', '展開接続図の図番', 'ケーブル製作図の図番']
-    assert sheets['ケーブル一覧表 Diff'].values.tolist() == [[CABLE, SCH_NAME, LIST_NAME], ['M70001', SCH_NAME, '']]
+    assert list(sheets)[4:6] == ['ケーブル抽出', 'ケーブル記載図面']
+    frame = sheets[out.CABLE_DRAWINGS_SHEET]
+    assert list(frame.columns) == ['ケーブル番号', '展開接続図', 'ケーブル一覧表', '線番設定表', 'ケーブル製作図']
+    assert frame.values.tolist() == [
+        [CABLE, SCH_NAME, LIST_NAME, WIRE_NAME, FAB_NAME], ['M70001', SCH_NAME, '', '', ''], ['M99999', '', '', WIRE_NAME, '']]
 
 
-def test_compare_sheets_are_colored_by_status_in_the_workbook():
-    """守るもの: Excel の比較シートの行色（405だけ＝ピンク・393だけ＝青・両方＝緑）。"""
-    ws = openpyxl.load_workbook(io.BytesIO(build_workbook(make_result())))['All Diff']
-    assert [[c.fill.fgColor.rgb[-6:] for c in ws[r]][0] for r in (2, 3, 4)] == ['EAF7EC', 'FEF1F5', 'EAF1FB']
-    assert ws.freeze_panes == 'A2'
+def test_cable_drawings_status_is_decided_by_which_kinds_of_drawings_exist():
+    """守るもの: 行の区分。4つすべて＝all／展開接続図だけ＝405only／展開接続図とほかのどれか＝with405／展開接続図が無くほかのどれか＝no405。"""
+    rows = out.cable_drawing_rows(make_result())
+    assert [(r['cable'], r['status']) for r in rows] == [(CABLE, 'all'), ('M70001', '405only'), ('M99999', 'no405')]
+    result = make_result()
+    result['extracts']['393'][3]['cables'] = []                      # 一覧表にケーブルが無ければ、製作図も一覧表経由で出なくなる
+    by_name(result['drawings'], LIST_NAME)['list_rows'] = []
+    assert [r['status'] for r in out.cable_drawing_rows(result)] == ['with405', '405only', 'no405']
 
 
-def test_group_sheet_names_do_not_collide_with_fixed_sheets():
-    """守るもの: グループ名が固定のシート名と衝突するとき（グループ名が `All` など）は、`_2` を付けて別名にする。"""
-    ds = build()
-    result = with_extracts(check_consistency(ds), {'405': [], '393': [
-        extract(n, [CABLE] if n == LIST_NAME else [], title='All') for n in sorted(d['drawing_number'] for d in ds)]})
-    assert [n for n, _ in preview_sheets(result)][5:7] == ['All Diff', 'All_2 Diff']
+def test_cable_drawings_cells_are_colored_by_row_status_in_the_workbook():
+    """守るもの: Excel のケーブル記載図面のセル色。緑＝すべて揃う（全セル）／ピンク＝展開接続図だけ／青＝展開接続図とほかの図面（存在するセル）／
+    黄＝展開接続図が無くほかの図面（存在するセル）。値の無いセルは色なし。ケーブル番号のセルは行の区分の色。"""
+    result = make_result()
+    ws = openpyxl.load_workbook(io.BytesIO(build_workbook(result)))[out.CABLE_DRAWINGS_SHEET]
+    fills = lambda r: [c.fill.fgColor.rgb[-6:] if c.fill.fill_type else None for c in ws[r]]   # noqa: E731
+    assert fills(2) == ['EAF7EC'] * 5
+    assert fills(3) == ['FEF1F5', 'FEF1F5', None, None, None]
+    assert fills(4) == ['FFF6D5', None, None, 'FFF6D5', None]
+    # 青: 展開接続図と、存在しているほかの図面（線番設定表だけ）
+    result['extracts']['393'][3]['cables'] = []
+    by_name(result['drawings'], LIST_NAME)['list_rows'] = []
+    ws = openpyxl.load_workbook(io.BytesIO(build_workbook(result)))[out.CABLE_DRAWINGS_SHEET]
+    assert [c.fill.fgColor.rgb[-6:] if c.fill.fill_type else None for c in ws[2]] == ['EAF1FB', 'EAF1FB', None, 'EAF1FB', None]
+    assert ws.freeze_panes == 'B2'
 
 
 # ---------------------------------------------------------------- 形の保証
@@ -293,7 +310,7 @@ def test_group_sheet_names_do_not_collide_with_fixed_sheets():
 def test_empty_result_still_builds_all_sheets():
     result = with_extracts(check_consistency([]), {'405': [], '393': []})
     book = pd.read_excel(io.BytesIO(build_workbook(result)), sheet_name=None)
-    assert list(book) == [*FIXED_SHEET_NAMES[:5], 'All Diff', *FIXED_SHEET_NAMES[5:]]
+    assert list(book) == FIXED_SHEET_NAMES
 
 
 def test_every_preview_sheet_converts_to_arrow():

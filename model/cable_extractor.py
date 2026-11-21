@@ -1,4 +1,4 @@
-"""展開接続図・ケーブル製作図の DXF からケーブル番号を抽出するモデル層（streamlit 非依存）。
+"""展開接続図・ケーブル図の DXF からケーブル番号を抽出するモデル層（streamlit 非依存）。
 
 ケーブル番号は `W No.M39001` 形式のラベルから拾う。ラベル抽出自体は共有の
 `extract_labels.py`（正本は DXF-extract-labels）を無変更で使う。
@@ -7,6 +7,7 @@ import os
 import re
 import unicodedata
 
+from .text_utils import underscores_to_spaces
 from .extract_labels import extract_labels
 
 # 図番（共有 extract_labels.py の DRAWING_NUMBER_PATTERN と同じ）
@@ -25,8 +26,8 @@ REMARK_SEPARATOR = '、'
 
 
 def _normalize(label):
-    """全角→半角（NFKC）。備考は元の大小文字を保つため大文字化しない。"""
-    return unicodedata.normalize('NFKC', label)
+    """全角→半角（NFKC）。単語をつなぐアンダースコアは空白にする。備考は元の大小文字を保つため大文字化しない。"""
+    return underscores_to_spaces(unicodedata.normalize('NFKC', label))
 
 
 def find_cables(labels):
@@ -119,7 +120,7 @@ def extract_cables(dxf_path, original_filename):
         raise ValueError(info['error'])
     return {
         'drawing_number': os.path.splitext(os.path.basename(original_filename))[0],
-        'title': info.get('title') or '',
-        'subtitle': info.get('subtitle') or '',
+        'title': underscores_to_spaces(info.get('title') or ''),
+        'subtitle': underscores_to_spaces(info.get('subtitle') or ''),
         'cables': find_cables(labels),
     }

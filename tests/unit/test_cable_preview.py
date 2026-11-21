@@ -99,3 +99,10 @@ def test_to_svg_maps_dxf_coordinates_onto_the_drawn_lines():
     assert any(abs(sx - x) < 0.05 * base.scale and abs(sy - y) < 0.05 * base.scale for sx, sy in starts)
     x2, y2 = cable_preview.to_svg(base, 300, 50)
     assert abs((x2 - x) - 200 * base.scale) < 1e-6 and abs(y2 - y) < 1e-6
+
+
+def test_mark_text_matching_treats_underscores_joining_words_as_spaces():
+    """守るもの: viewer の強調で文字を突き合わせる規則（`_squash`）は、読み取り側（`norm()`）と同じく、単語をつなぐ `_` を空白とみなす
+    （同じ基準点に文字が複数あるときの絞り込みで、`ACCESSORY_CABLE` と `ACCESSORY CABLE` を別の文字にしない）。"""
+    from model.cable_preview import _squash
+    assert _squash('ＡＣＣＥＳＳＯＲＹ＿ＣＡＢＬＥ') == _squash('ACCESSORY CABLE') == 'ACCESSORYCABLE'

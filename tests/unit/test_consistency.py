@@ -938,7 +938,7 @@ def fake_extract(path, name):
 
 def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last_stage(monkeypatch):
     """守るもの: 393 は抽出＋393 の読み取り、405 は抽出だけ、その後に一覧表が指す 405 の図面だけを展開接続図として読む。
-    進捗の段階の順は 393 → 405 の抽出 → 展開接続図の読み取り。"""
+    進捗の段階は 393 → 405（読む図面は「展開接続図の読み取り」、ほかは「抽出」。1つのファイルで続けて行う）。"""
     calls = []
 
     def fake_analyze(path, name):
@@ -949,8 +949,8 @@ def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last
             d['list_rows'] = [list_row(接続図パターン='EE****-610-**')]
         return d
 
-    def fake_schematic(path, name):
-        calls.append(('405', name))
+    def fake_schematic(path, name, title=None):
+        calls.append(('405', name, title))
         return {'title': 't', 'error': '', 'no_text': False, 'region_error': '', 'occurrences': []}
 
     monkeypatch.setattr(C, 'analyze_drawing', fake_analyze)
@@ -960,7 +960,7 @@ def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last
     items_405 = [(f'{n}.dxf', b'x') for n in (SCH_NAME, 'EE7777-700-01A')]
     items_393 = [(f'{n}.dxf', b'x') for n in (LIST_NAME, 'EE8888-800-01A')]
     drawings, extracts, errors = C.analyze_uploads(items_405, items_393, progress=lambda *a: progress.append(a))
-    assert errors == [] and calls == [('393', LIST_NAME), ('393', 'EE8888-800-01A'), ('405', SCH_NAME)]
+    assert errors == [] and calls == [('393', LIST_NAME), ('393', 'EE8888-800-01A'), ('405', SCH_NAME, fake_extract(None, SCH_NAME)['title'])]
     assert {d['drawing_number']: d['set'] for d in drawings} == {
         LIST_NAME: '393', 'EE8888-800-01A': '393', SCH_NAME: '405', 'EE7777-700-01A': '405'}
     sch = by_name(drawings, SCH_NAME)
@@ -968,9 +968,9 @@ def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last
     assert by_name(drawings, 'EE7777-700-01A')['schematic'] is None       # 一覧表が指さない 405 は読まない
     assert [r['drawing_number'] for r in extracts['405']] == [SCH_NAME, 'EE7777-700-01A']     # 図番順
     assert [r['drawing_number'] for r in extracts['393']] == [LIST_NAME, 'EE8888-800-01A']
-    assert [p[3] for p in progress] == [C.PHASE_DRAWINGS] * 2 + [C.PHASE_EXTRACT] * 2 + [C.PHASE_SCHEMATIC]
-    assert progress[-1][:3] == (0, 1, SCH_NAME)
-    assert [p[:2] for p in progress[:4]] == [(0, 2), (1, 2), (0, 2), (1, 2)]
+    # 405 は1つのファイルの中で抽出と展開接続図の読み取りを続けて行う（DXF の解析を1回にする）。段階は、読む図面は「展開接続図の読み取り」、そうでなければ「抽出」
+    assert progress == [(0, 2, f'{LIST_NAME}.dxf', C.PHASE_DRAWINGS), (1, 2, 'EE8888-800-01A.dxf', C.PHASE_DRAWINGS),
+                        (0, 2, f'{SCH_NAME}.dxf', C.PHASE_SCHEMATIC), (1, 2, 'EE7777-700-01A.dxf', C.PHASE_EXTRACT)]
 
 
 def test_analyze_uploads_keeps_going_when_a_file_or_a_schematic_fails(monkeypatch):
@@ -986,7 +986,7 @@ def test_analyze_uploads_keeps_going_when_a_file_or_a_schematic_fails(monkeypatc
             raise ValueError('broken 405')
         return fake_extract(path, name)
 
-    def boom(path, name):
+    def boom(path, name, title=None):
         raise RuntimeError('broken schematic')
 
     monkeypatch.setattr(C, 'analyze_drawing', analyze)
@@ -1006,7 +1006,7 @@ def test_schematic_without_text_marks_the_drawing_as_having_no_text(monkeypatch)
     monkeypatch.setattr(C, 'analyze_drawing', lambda path, name: drawing(
         name, list_rows=[list_row(接続図パターン='EE****-610-**')]))
     monkeypatch.setattr(C, 'extract_cables', fake_extract)
-    monkeypatch.setattr(C, 'analyze_schematic', lambda path, name: {
+    monkeypatch.setattr(C, 'analyze_schematic', lambda path, name, title=None: {
         'title': '', 'error': '', 'no_text': True, 'region_error': '', 'occurrences': [], 'refs': []})
     drawings, _extracts, errors = C.analyze_uploads([(f'{SCH_NAME}.dxf', b'x')], [(f'{LIST_NAME}.dxf', b'x')])
     assert errors == [] and by_name(drawings, SCH_NAME)['no_text'] and not by_name(drawings, LIST_NAME)['no_text']

@@ -300,8 +300,9 @@ def cable_drawing_rows(result):
     return rows
 
 
-def cable_drawings_frame(result):
-    rows = [[r['cable'], *('、'.join(r['drawings'][k]) for k in CABLE_DRAWINGS_COLUMNS[1:])] for r in cable_drawing_rows(result)]
+def cable_drawings_frame(result, rows=None):
+    """ケーブル記載図面の表。`rows` は `cable_drawing_rows(result)`（省略すると計算する。シートの組み立てでは色分けと共有して1回だけ計算する）。"""
+    rows = [[r['cable'], *('、'.join(r['drawings'][k]) for k in CABLE_DRAWINGS_COLUMNS[1:])] for r in (cable_drawing_rows(result) if rows is None else rows)]
     return pd.DataFrame(rows, columns=CABLE_DRAWINGS_COLUMNS)
 
 
@@ -314,7 +315,9 @@ def sheet_plan(result):
               WIRE_CHECK_SHEET: wire_check_frame, INDEX_SHEET: index_frame, EXTRACT_SHEET: extract_frame, CABLE_DRAWINGS_SHEET: cable_drawings_frame,
               LIST_SHEET: list_frame, WIRE_SHEET: wire_frame, CONN_SHEET: conn_frame, SCHEMATIC_SHEET: schematic_frame,
               PATTERN_SHEET: pattern_frame, TEXT_SHEET: text_frame}
-    return [(name, frames[name](result), cable_drawing_rows(result) if name == CABLE_DRAWINGS_SHEET else None) for name in FIXED_SHEET_NAMES]
+    cable_rows = cable_drawing_rows(result)
+    return [(name, cable_drawings_frame(result, cable_rows) if name == CABLE_DRAWINGS_SHEET else frames[name](result),
+             cable_rows if name == CABLE_DRAWINGS_SHEET else None) for name in FIXED_SHEET_NAMES]
 
 
 def preview_sheets(result):

@@ -35,11 +35,13 @@ from .cable_compare import compare_extracts
 from .cable_extractor import extract_cables
 from .cell_values import SEP, code_matches_name, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
 from .cell_values import side as _side, squash as _squash, values as _values
-from . import highlights
+from . import dxf_cache, highlights
 from .drawing_geometry import load
 from .schematic_reader import analyze_schematic
 from .symbols import NA, NG, OK, SEVERITY, SYMBOLS, UNREAD, WEAK  # noqa: F401  (公開名。他のモジュールとテストが consistency から使う)
 from .symbols import worst as _worst
+
+dxf_cache.install()      # 共有ファイルの `ezdxf.readfile` を、ファイル1つの処理の間だけ解析結果を使い回すものに置き換える
 
 # 判定の記号・重さは symbols.py が正（ここから公開名として使えるようにそのまま import する）
 
@@ -171,7 +173,7 @@ def analyze_uploads(items_405, items_393, progress=None):
         (図面の dict のリスト, 抽出結果, エラーのリスト)。抽出結果は {'405': [extract_cables の結果], '393': [...]}（図番順）。
         エラーは [(ファイル名, メッセージ), ...]。1つのファイルが壊れていても残りは処理を続ける（壊れたファイルは図面にも抽出結果にも入らない）。
     """
-    drawings, errors, files = [], [], {}
+    drawings, errors = [], []
     extracts = {SET_405: [], SET_393: []}
     for i, (name, data) in enumerate(items_393):
         if progress:
@@ -184,32 +186,36 @@ def analyze_uploads(items_405, items_393, progress=None):
             continue
         extracts[SET_393].append(extract)
         drawings.append(drawing)
-    for i, (name, data) in enumerate(items_405):
+    # 展開接続図として読む 405 の図面は、一覧表の「接続図パターン」が指すもの。ファイル名（図番）だけで決まるので、読む前に決められる
+    stems_405 = [os.path.splitext(os.path.basename(name))[0] for name, _ in items_405]
+    targets = set(schematic_targets(drawings + [_empty_drawing(stem, drawing_set=SET_405) for stem in stems_405]))
+    for i, ((name, data), stem) in enumerate(zip(items_405, stems_405)):
         if progress:
-            progress(i, len(items_405), name, PHASE_EXTRACT)
-        stem = os.path.splitext(os.path.basename(name))[0]
+            progress(i, len(items_405), name, PHASE_SCHEMATIC if stem in targets else PHASE_EXTRACT)
+
+        def read_one(path, name=name, stem=stem):
+            # 1つのファイルの中で、抽出と展開接続図の読み取りを続けて行う（DXF の解析を1回にする。`dxf_cache`）
+            extract = extract_cables(path, name)
+            if stem not in targets:
+                return extract, None, None
+            try:
+                return extract, analyze_schematic(path, stem, title=extract.get('title', '')), None
+            except Exception as e:  # noqa: BLE001 - 読み取りの失敗は抽出結果を残してエラーにする
+                return extract, None, f'{type(e).__name__}: {e}'
         try:
-            extract = _with_temp_file(data, lambda path: extract_cables(path, name))
+            extract, schematic, schematic_error = _with_temp_file(data, read_one)
         except Exception as e:  # noqa: BLE001
             errors.append((name, f'{type(e).__name__}: {e}'))
             continue
-        files[stem] = (name, data)
         extracts[SET_405].append(extract)
-        drawings.append(_empty_drawing(stem, drawing_set=SET_405))
-    by_name = _index(drawings, SET_405)
-    targets = schematic_targets(drawings)
-    for i, stem in enumerate(targets):
-        if progress:
-            progress(i, len(targets), stem, PHASE_SCHEMATIC)
-        name, data = files[stem]
-        try:
-            schematic = _with_temp_file(data, lambda path: analyze_schematic(path, stem))
-        except Exception as e:  # noqa: BLE001
-            errors.append((name, f'{type(e).__name__}: {e}'))
-            continue
-        by_name[stem]['schematic'] = schematic
-        by_name[stem]['kinds'].append(KIND_SCHEMATIC)
-        by_name[stem]['no_text'] = schematic['no_text']
+        drawing = _empty_drawing(stem, drawing_set=SET_405)
+        if schematic_error:
+            errors.append((name, schematic_error))
+        elif schematic is not None:
+            drawing['schematic'] = schematic
+            drawing['kinds'].append(KIND_SCHEMATIC)
+            drawing['no_text'] = schematic['no_text']
+        drawings.append(drawing)
     for results in extracts.values():
         results.sort(key=lambda r: r['drawing_number'])
     return drawings, extracts, errors
@@ -229,11 +235,13 @@ def run_check(items_405, items_393, progress=None):
 
 
 def _with_temp_file(data, func):
+    """データを一時ファイルに書き、`func(path)` を呼ぶ。この中では同じ DXF を1回だけ解析する（`dxf_cache.parse_once`）。"""
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, 'input.dxf')
         with open(path, 'wb') as f:
             f.write(data)
-        return func(path)
+        with dxf_cache.parse_once():
+            return func(path)
 
 
 # ---------------------------------------------------------------- 照合の補助（パターンの解決など）
@@ -836,7 +844,7 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
                 break
     # ピンの無い接続（線番だけ。表A の `*1`-`*1` など）は、線番（`*n` を置き換えた値）が同じラベルの芯線に割り当てる。判定は変えない
     # （PIN は比べない・線番はラベルで決まる）。割り当てるのは、芯線の図形・ラベルの強調のため。
-    by_label = set()       # ピンでは当たらず、線番のラベルで割り当てた接続（PIN の判定は ○ にしない）
+    loose = set()       # 左右のピンの組が完全には合わず、ラベルまたは一部のピンで割り当てた接続（PIN の判定は ○ にしない）
     if comparable:
         for j, c in enumerate(conns):
             key = _squash(c['number'])
@@ -846,7 +854,7 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
                 if wi not in used and key in {_squash(x) for x in w['labels'][:2] if not _is_color(x)}:
                     used.add(wi)
                     assign[j] = wi
-                    by_label.add(j)
+                    loose.add(j)
                     break
     # ピンの組が完全には合わない接続（`GND`-`D` と 4-D など）は、当たり（ピンの一致）が最も大きい芯線に割り当てる（芯線の図形・ピンの文字を、この接続の判定で塗るため）
     if comparable:
@@ -859,7 +867,7 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
             if best[0] > 0:
                 used.add(best[1])
                 assign[j] = best[1]
-                by_label.add(j)
+                loose.add(j)
     for j, c in enumerate(conns):
         has_pins = any(c['pins'])
         pair = bool(c['vals']) and not all(v in _DRAIN for v in c['vals'])      # 左右の値の組を芯線の両端のピンと比べる（SG/SH だけの組は比べない）
@@ -868,7 +876,7 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
             pin = NA
         elif out['pin_unread']:
             pin = UNREAD if has_pins else NA
-        elif j in assign and j not in by_label:
+        elif j in assign and j not in loose:
             pin = OK
         else:
             pin = WEAK if _squash(c['number']) in _DRAIN or _squash(c['raw']) in _DRAIN else NG

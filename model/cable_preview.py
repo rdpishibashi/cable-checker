@@ -29,6 +29,7 @@ from ezdxf.fonts import fonts as ezdxf_fonts
 from .cable_extractor import find_cables
 from .common_utils import is_invisible
 from .drawing_geometry import text_anchor
+from .text_utils import underscores_to_spaces
 from .extract_labels import extract_text_from_entity
 from .symbols import BY_SEVERITY, LABELS, LEGEND_ORDER, RELATED, VIEWER_COLORS, rank
 
@@ -274,7 +275,8 @@ SYMBOL_TEXT_COLORS = VIEWER_COLORS          # 記号 → 文字・図形の色�
 
 
 def _squash(s: str) -> str:
-    return re.sub(r"\s+", "", unicodedata.normalize('NFKC', s or '')).upper()
+    """文字の突き合わせ用（NFKC・単語をつなぐ `_` を空白にしてから空白除去・大文字）。読み取り側の `norm()` と同じ規則にそろえる。"""
+    return re.sub(r"\s+", "", underscores_to_spaces(unicodedata.normalize('NFKC', s or ''))).upper()
 
 
 def apply_marks(base: BaseRender, marks) -> Tuple[list, dict, int]:

@@ -1073,10 +1073,8 @@ def find_shield(g, grid, box):
     for k, s in enumerate(g.segs):
         if not is_dashed(s):
             continue
-        if abs(s.a[1] - s.b[1]) < 0.05 if vertical else abs(s.a[0] - s.b[0]) < 0.05:
-            pass
-        else:
-            continue
+        if not (abs(s.a[1] - s.b[1]) < 0.05 if vertical else abs(s.a[0] - s.b[0]) < 0.05):
+            continue                                       # 縦長の記号なら横線、横長なら縦線だけ（記号の長い向きに直交するシールド）
         near = min((s.a, s.b), key=lambda p: min(math.dist(p, e) for e in ends))
         if min(math.dist(near, e) for e in ends) > SHIELD_END_TOL:
             continue
@@ -1373,8 +1371,10 @@ def _loop_ends(g, grid, device_rects, regions, rects, narrow, traces, path_all, 
     return {side: infos[0], other: infos[1]}
 
 
-def analyze_schematic(path, name):
+def analyze_schematic(path, name, title=None):
     """1枚の展開接続図を読み、ケーブル番号の出現ごとの芯線と両端の事実を返す。
+
+    `title` が渡されたら図面のタイトルとして使う（抽出で取得済み）。`None` なら `extract_cables()` で取る。
 
     Returns:
         {'title': タイトル, 'error': 読めなかった理由（無ければ ''）, 'no_text': 文字が1つも無い,
@@ -1392,10 +1392,13 @@ def analyze_schematic(path, name):
     if g.error:
         out['error'] = g.error
         return out
-    try:
-        out['title'] = extract_cables(path, name).get('title', '')
-    except Exception:  # noqa: BLE001 - タイトルが取れなくても読み取りは続ける
-        pass
+    if title is not None:
+        out['title'] = title
+    else:
+        try:
+            out['title'] = extract_cables(path, name).get('title', '')
+        except Exception:  # noqa: BLE001 - タイトルが取れなくても読み取りは続ける
+            pass
     if not g.txts:
         out['no_text'] = True
         return out

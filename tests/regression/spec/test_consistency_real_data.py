@@ -501,15 +501,16 @@ def test_cable_size_is_compared_with_the_awg_written_in_the_fab_drawing(result):
     ○37（AWG が1つだけ合う30、ケーブル本体とアース線の AWG が並ぶ6、数字が前の `UL444 type CM 18AWG-15C` の M06020）・
     ×2（M39021 は サイズ 26 で図面は `AWG20(GNYE)` だけ、M65232 の1行目は サイズ 10 で図面は `UL AWG20 GNYE` だけ）。
     製作図に AWG が無い63行・サイズが空の32行は比べない（－）。ほかの項目の判定は変えない。"""
-    row = row_of(result, 'M06020')
+    row = row_of(result, 'M06020', 'EE6888-306-51D', 8)
     assert row['cells']['ケーブル｜サイズ'] == '○' and '製作図 ○' in basis(result, row, 'ケーブル｜サイズ')
-    for cable in ('M06004', 'M39006', 'M39012', 'M39613', 'M39672', 'M65242'):      # 本体の AWG とアース線の AWG が並ぶ図面
-        assert row_of(result, cable)['cells']['ケーブル｜サイズ'] == '○', cable
-    row = row_of(result, 'M39021')
+    for cable, lst, line in (('M06004', 'EE6888-306-51D', 1), ('M39006', 'EE6892-339-51C', 6), ('M39012', 'EE6892-339-51C', 23),
+                             ('M39613', 'EE6892-339-51C', 28), ('M39672', 'EE6892-339-51C', 29), ('M65242', 'EE6892-365-62G', 10)):
+        assert row_of(result, cable, lst, line)['cells']['ケーブル｜サイズ'] == '○', cable      # 本体の AWG とアース線の AWG が並ぶ図面
+    row = row_of(result, 'M39021', 'EE6892-339-52B', 5)
     assert row['cells']['ケーブル｜サイズ'] == '×' and '図面は AWG20' in basis(result, row, 'ケーブル｜サイズ')
-    row = row_of(result, 'M65232', line=1)
-    assert row['cells']['ケーブル｜サイズ'] == '×' and row_of(result, 'M65232', line=2)['cells']['ケーブル｜サイズ'] == '－'
+    row = row_of(result, 'M65232', 'EE6892-365-62G', 1)
+    assert row['cells']['ケーブル｜サイズ'] == '×' and row_of(result, 'M65232', 'EE6892-365-62G', 2)['cells']['ケーブル｜サイズ'] == '－'
     # viewer: M39006 は サイズ 24 で、図面に `ULシールド線 AWG24-40C`（○）と `UL AWG22 GNYE`（強調しない）がある
-    marks = [(m['text'], m['symbol']) for m in row_of(result, 'M39006')['marks'] if m['item'] == 'ケーブル｜サイズ']
+    marks = [(m['text'], m['symbol']) for m in row_of(result, 'M39006', 'EE6892-339-51C', 6)['marks'] if m['item'] == 'ケーブル｜サイズ']
     assert ('24', '○') in marks and ('ULシールド線 AWG24-40C', '○') in marks and not any('GNYE' in t for t, _ in marks)
 

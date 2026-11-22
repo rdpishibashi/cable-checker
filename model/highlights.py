@@ -154,13 +154,14 @@ def _wire_symbol(r):
     return _worst(syms) if syms else NA
 
 
-def row_shapes(cells, pick, mat, fab_conns):
+def row_shapes(cells, pick, mat, fab_conns, row=None):
     """一覧表の1行の照合結果に対応する、図面上の図形の強調（viewer 用）。
 
     [{'drawing', 'kind': 'lines'|'ellipse'|'capsule'|'rect'|'circle', 'geom', 'symbol', 'item'}]（geom は DXF 座標。lines は線分の
     リスト、ellipse・capsule・rect は外接矩形、circle は (中心, 半径)）。照合の記号・根拠は変えない。
     製作図: 接続の線＝その接続の判定。展開接続図: 引出線・記号＝「図面の対応｜展開接続図」、芯線＝割り当てた接続の判定（**両端に端末が
-    ある芯線だけ**。端末の無い芯線は塗らない）、端末＝「端末｜機器符号」。機器の箱は塗らない。"""
+    ある芯線だけ**。端末の無い芯線は塗らない）、端末＝「端末｜機器符号」（端の名前が一覧表の機器符号のどれかに一致すれば ○。文字の強調と同じ規則）。
+    機器の箱は塗らない。"""
     out = []
     for j, (d, c) in enumerate(fab_conns):
         r = mat['rows'][j] if j < len(mat['rows']) else None
@@ -190,10 +191,14 @@ def row_shapes(cells, pick, mat, fab_conns):
             out.append(_shape(dn, 'lines', w['_path'], _wire_symbol(r) if r else NA, '芯線'))
     for i in (1, 2):
         code_sym = _combine(_cmp(cells, item_column(f'端末{i}', '機器符号'), '展開接続図'))
+        list_codes = _codes((row or {}).get(f'端末{i}_機器符号'))
         for w in occ['wires']:
-            shape = (w['ends'].get(orient['sides'][i]) or {}).get('_shape')
+            e = w['ends'].get(orient['sides'][i]) or {}
+            shape = e.get('_shape')
+            hit = code_sym != NA and bool(e.get('name')) and any(code_matches_name(c, e['name']) for c in list_codes)
+            sym = OK if hit else code_sym
             if shape and 'rect' in shape:
-                out.append(_shape(dn, 'rect', shape['rect'], code_sym, f'端末{i}｜機器符号'))
+                out.append(_shape(dn, 'rect', shape['rect'], sym, f'端末{i}｜機器符号'))
             elif shape and 'circle' in shape:
-                out.append(_shape(dn, 'circle', shape['circle'], code_sym, f'端末{i}｜機器符号'))
+                out.append(_shape(dn, 'circle', shape['circle'], sym, f'端末{i}｜機器符号'))
     return out

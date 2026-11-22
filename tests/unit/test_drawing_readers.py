@@ -315,6 +315,31 @@ def test_fab_tables_and_straight_connections_with_label(tmp_path):
     assert first['端1_位置'] == '左' and first['端2_位置'] == '右'
 
 
+def test_fab_columns_with_different_row_counts_form_one_table(tmp_path):
+    """守るもの（ユーザー報告 2026-11-23。EE3298-545-28A の左の表 CNCM: 線番の列だけ下に1行多い）: 隣り合う列の行の区切りが上から同じなら、
+    行数が違っても1つの表にまとめ、電線がつながる行が 線番 と PIN の両方を持つ。以前は行数が同じ列だけをまとめたため、線番の列が別の表になり、
+    接続の端に線番が無かった（viewer で左の表の線番が強調されなかった）。行が無い列の値は空。"""
+    doc, msp = new_doc()
+    for x, bottom in ((10, 74), (30, 74), (50, 82)):
+        line(msp, (x, bottom), (x, 105))
+    for y in (105, 98, 90, 82):
+        line(msp, (10, y), (50, y))
+    line(msp, (10, 74), (30, 74))                 # 線番の列だけ1行多い
+    text(msp, '線番', 14, 100)
+    text(msp, 'PIN No.', 34, 100)
+    for v, x, y in (('*1', 14, 93), ('*2', 14, 85), ('SH', 14, 77), ('A', 34, 93), ('B', 34, 85)):
+        text(msp, v, x, y)
+    draw_table(msp, [100, 120, 140], ['PIN No.', '線番'], [('1', '2'), ('', '')])
+    line(msp, (50, 94), (100, 94))
+    res, _pairs = conns(tmp_path, doc)
+    left = min(res['tables'], key=lambda t: t['x0'])
+    assert [c['kind'] for c in left['cols']] == ['線番', 'PIN'] and len(left['rows']) == 3
+    assert (left['rows'][2]['線番'], left['rows'][2]['PIN']) == ('SH', '')
+    (row,) = fab_drawing.connection_rows(res)
+    assert (row['端1_線番'], row['端1_PIN No.'], row['端2_PIN No.']) == ('*1', 'A', '1')
+    assert row['_端1_refs']['線番'][0][0] == '*1'
+
+
 def test_fab_wire_ending_up_to_0_5_short_of_the_table_edge_still_connects_that_row(tmp_path):
     """守るもの: 電線の端が表の左右の辺から 0.32 離れていても（0.5 以内）その行につながる（以前は許容 0.3 で、その行の接続が落ちた。
     実図面 EE3298-556-51A の GND-D）。線どうしの連結の許容（0.3）は変えない。"""

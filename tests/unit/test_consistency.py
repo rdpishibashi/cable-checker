@@ -681,6 +681,31 @@ def test_end_names_matching_a_list_code_are_marked_ok_even_when_the_device_code_
     assert marks == {('CNCM11UP', OK), ('CNCM11DN', NG)}
 
 
+def test_pin_matches_when_either_the_pin_or_the_wire_number_of_the_same_end_is_on_the_wire():
+    """守るもの（ユーザー決定 2026-11-23。見出しの「線番」と「PIN No.」が逆に書かれた製作図 EE3298-537-85C の M06006）: 同じ端に PIN No. と線番の
+    両方があれば、どちらを芯線のピンに当ててもよい（見出しは同義）。表の列のまとめ方を直したら、PIN No. の列の `X0100` だけが使われて × になった。"""
+    conn = {'端の数': 2, '端1_線番': '1', '端1_PIN No.': 'X0100', '端2_線番': '', '端2_PIN No.': '2'}
+    ds = with_schematic(build(), wires=[wire(end('box', 'TBR1B', '2'), end('box', 'CN1', '1'))])
+    by_name(ds, FAB_NAME).update(fab_conns=[conn])
+    assert sym(ds, 'pin') == OK
+    conn.update({'端1_線番': '7'})                  # どちらも芯線のピンに無ければ ×
+    assert sym(ds, 'pin') == NG
+
+
+def test_terminal_box_is_drawn_ok_when_its_name_matches_a_list_code_even_if_the_cell_is_ng():
+    """守るもの（ユーザー報告 2026-11-23。EE6888-650-01C の M06021）: viewer の端末の枠（コネクタのボックス）は、端の名前が一覧表のその端末の機器符号の
+    どれかに一致すれば ○（文字の強調と同じ規則）。合わない名前の枠はセルの記号。以前は枠がセルの記号（×）のままで、合っている CNCM のボックスも赤だった。"""
+    def boxed(name, pin, x):
+        e = end('box', name, pin)
+        e['_shape'] = {'rect': (x, 0.0, x + 1.0, 1.0)}
+        return e
+    wires = [wire(boxed('TBR1B', '1', 0), boxed('CNCM11UP', '1', 10)), wire(boxed('TBR1B', '2', 0), boxed('CNCM11DN', '2', 20))]
+    res, row = run(with_schematic(build(), wires=wires, row={'端末2_機器符号': 'CNCM11UP,CN11DN'}))
+    assert row['cells'][COL['c2']] == NG
+    rects = sorted((s['geom'][0], s['symbol']) for s in row['shapes'] if s['kind'] == 'rect' and s['item'] == '端末2｜機器符号')
+    assert rects == [(10.0, OK), (20.0, NG)]
+
+
 # ---------------------------------------------------------------- 展開接続図: 芯数・種類
 
 def test_core_count_exact_weak_excluding_drain_and_ng():

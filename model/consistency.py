@@ -853,6 +853,18 @@ def _conn_vals(c):
     return vals
 
 
+def _conn_choices(c):
+    """製作図の接続の左右の値の組の候補（`Counter` のリスト）。同じ端に PIN No. と線番の両方があれば、どちらを芯線のピンに当ててもよい
+    （見出しの「線番」と「PIN No.」は同義。見出しが逆に書かれた図面 EE3298-537-85C がある。ユーザー決定 2026-11-23）。`*n` は n。"""
+    alts = []
+    for k in (1, 2):
+        vs = [_squash(v.strip().lstrip('*')) for v in (c.get(f'端{k}_PIN No.') or '', c.get(f'端{k}_線番') or '')]
+        vs = list(dict.fromkeys(v for v in vs if v))
+        if vs:
+            alts.append(vs)
+    return [Counter(choice) for choice in itertools.product(*alts)] if alts else []
+
+
 def _conn_info(d, c, wire_row):
     """製作図の端が2つの接続1本の事実。`*n` は線番設定表の行の値で置き換える。"""
     raw = c.get('端1_線番') or c.get('端2_線番') or ''
@@ -865,7 +877,8 @@ def _conn_info(d, c, wire_row):
     labels = [x.strip() for x in (c.get('ラベル') or '').split(' | ') if x.strip()]
     # 表の見出し「線番」と「PIN No.」は同義。左の値・右の値の組として、芯線の両端のピンに当てる（同じ端に両方あれば PIN No.）。`*n` は n 番目の端子（n）として扱う
     return {'drawing': d['drawing_number'], 'pins': (c.get('端1_PIN No.') or '', c.get('端2_PIN No.') or ''),
-            'raw': raw, 'id': conn_id, 'number': resolved, 'colors': [x for x in labels if _is_color(x)], 'vals': _conn_vals(c)}
+            'raw': raw, 'id': conn_id, 'number': resolved, 'colors': [x for x in labels if _is_color(x)], 'vals': _conn_vals(c),
+            'choices': _conn_choices(c)}
 
 
 def _wire_matrix(fab_conns, wire_row, pick, multi):
@@ -889,11 +902,10 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
     pin_keys = {_squash(x) for w in wires for x in w['pins'].values() if x}
     used, assign = set(), {}
     for j, c in enumerate(conns):
-        fp = Counter(c['vals'])
-        if not fp or not comparable or all(v in _DRAIN for v in fp):
+        if not c['choices'] or not comparable or all(v in _DRAIN for v in c['vals']):
             continue
         for wi, w in enumerate(wires):
-            if wi not in used and not (fp - w['pool']):
+            if wi not in used and any(not (fp - w['pool']) for fp in c['choices']):
                 used.add(wi)
                 assign[j] = wi
                 break
@@ -916,8 +928,8 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
         for j, c in enumerate(conns):
             if j in assign or not c['vals'] or all(v in _DRAIN for v in c['vals']):
                 continue
-            fp = Counter(c['vals'])
-            scored = [(sum(min(n, w['pool'][v]) for v, n in fp.items()), wi) for wi, w in enumerate(wires) if wi not in used]
+            scored = [(max(sum(min(n, w['pool'][v]) for v, n in fp.items()) for fp in c['choices']), wi)
+                      for wi, w in enumerate(wires) if wi not in used]
             best = max(scored, default=(0, None))
             if best[0] > 0:
                 used.add(best[1])
@@ -1257,7 +1269,7 @@ def _evaluate_row(ctx, list_name, row):
              'sel': [(x['drawing']['drawing_number'], x['row']['表'], x['row']['行']) for x in sel],
              'schematic': pick['drawing']['drawing_number'] if pick is not None else ''}
     marks = highlights.row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns)
-    shapes = highlights.row_shapes(cells, pick, mat, fab_conns)
+    shapes = highlights.row_shapes(cells, pick, mat, fab_conns, row)
     return cells, wire_rows, marks, focus, shapes
 
 

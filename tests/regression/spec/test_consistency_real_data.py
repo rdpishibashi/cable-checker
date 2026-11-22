@@ -124,10 +124,12 @@ def test_fab_drawings_and_connections(drawings):
 
 
 def test_reversed_header_table_is_read_as_drawn(drawings):
-    """537-85C は見出しが逆の表。読み取りは図面のとおり（線番とPINを入れ替えない）。"""
+    """537-85C は見出しが逆の表。読み取りは図面のとおり（線番とPINを入れ替えない）。右の表は線番の列が2行・PIN No. の列が3行で、
+    2026-11-23 から1つの表として読む（行数の違う列もまとめる）ので、端1 は線番 `1`・PIN No. `X0100` の両方を持つ（以前は PIN No. が空）。
+    照合は、同じ端のどちらかが芯線のピンに合えば一致（M06006 の PIN は ○）。"""
     d = next(d for d in drawings if d['drawing_number'].endswith('-537-85C'))
     first = d['fab_conns'][0]
-    assert (first['端1_線番'], first['端1_PIN No.'], first['端2_線番'], first['端2_PIN No.']) == ('1', '', 'X0100', '2')
+    assert (first['端1_線番'], first['端1_PIN No.'], first['端2_線番'], first['端2_PIN No.']) == ('1', 'X0100', 'X0100', '2')
 
 
 def test_note_patterns_resolve_as_in_the_feasibility_study(drawings):
@@ -553,3 +555,16 @@ def test_end_names_matching_list_codes_are_green_even_when_the_cell_is_ng_m06021
     assert (row['cells']['端末1｜機器符号'], row['cells']['端末2｜機器符号']) == ('×', '×')
     marks = {(m['text'], m['symbol']) for m in row['marks'] if m['drawing'] == 'EE6888-650-01C' and m['item'].endswith('機器符号')}
     assert marks == {('CNCM', '○'), ('CNCM11UP', '○'), ('CNCM12', '○'), ('CNCM11DN', '×')}
+
+
+def test_fab_wire_numbers_on_both_tables_and_connector_boxes_are_green_m06021(result):
+    """守るもの（ユーザー報告 2026-11-23。M06021）: 製作図 EE3298-545-28A の左の表 CNCM（線番の列だけ1行多い）も1つの表として読み、左右の表の線番
+    （CM11UP・N241・CM11DN・CM12）がどちらも ○。展開接続図 EE6888-650-01C のコネクタの枠は、一覧表の機器符号と合う CNCM（6）・CNCM11UP・CNCM12（4）が ○、
+    一覧表が `CN11DN` と書かれた CNCM11DN（2）は ×。M06006（見出しが逆の EE3298-537-85C）は、同じ端の線番か PIN No. のどちらかが芯線のピンに合えば一致で ○ のまま。"""
+    row = row_of(result, 'M06021')
+    fab = {(m['text'], m['symbol'], m['anchor'][0] < 120) for m in row['marks'] if m['drawing'] == 'EE3298-545-28A' and m['item'] == '芯線｜線番'}
+    assert fab == {(t, '○', left) for t in ('CM11UP', 'N241', 'CM11DN', 'CM12') for left in (True, False)}
+    rects = sorted((s['item'], s['symbol']) for s in row['shapes'] if s['kind'] == 'rect')
+    assert rects == sorted([('端末1｜機器符号', '○')] * 6 + [('端末2｜機器符号', '○')] * 4 + [('端末2｜機器符号', '×')] * 2)
+    assert row_of(result, 'M06006')['cells']['芯線｜PIN'] == '○'
+

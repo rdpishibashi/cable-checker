@@ -665,6 +665,22 @@ def test_unit_text_is_marked_with_the_unit_symbol_only_not_mixed_with_the_module
     assert marks == [('ALS1', OK)]
 
 
+def test_end_names_matching_a_list_code_are_marked_ok_even_when_the_device_code_cell_is_ng():
+    """守るもの（ユーザー報告 2026-11-22。EE6888-650-01C の M06021）: 展開接続図の端の名前のうち、一覧表のその端末の機器符号のどれかに一致するものは
+    viewer で ○。合わない名前はセルの記号（×）。セルの判定は変えない（一覧表の `CN11DN` は図面の `CNCM11DN` と合わないので × のまま）。
+    以前は、セルが × だと合っている名前（`CNCM11UP`・`CNCM12`）まで赤になった。"""
+    def named(name, pin):
+        e = end('box', name, pin)
+        e['_refs'] = {'name': (float(len(name)), float(pin))}
+        return e
+    wires = [wire(named('TBR1B', '1'), named('CNCM11UP', '1')), wire(named('TBR1B', '2'), named('CNCM11DN', '2'))]
+    ds = with_schematic(build(), wires=wires, row={'端末2_機器符号': 'CNCM11UP,CN11DN'})
+    res, row = run(ds)
+    assert row['cells'][COL['c2']] == NG
+    marks = {(m['text'], m['symbol']) for m in row['marks'] if m['item'] == '端末2｜機器符号' and m['drawing'] == SCH_NAME}
+    assert marks == {('CNCM11UP', OK), ('CNCM11DN', NG)}
+
+
 # ---------------------------------------------------------------- 展開接続図: 芯数・種類
 
 def test_core_count_exact_weak_excluding_drain_and_ng():

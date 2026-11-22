@@ -109,13 +109,16 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
         for i in (1, 2):
             side = orient['sides'][i]
             code_sym = _combine(_cmp(cells, col(f'端末{i}', '機器符号'), '展開接続図'))
+            list_codes = _codes(row.get(f'端末{i}_機器符号'))
             for w in occ['wires']:
                 e = w['ends'].get(side)
                 if not e or e['kind'] is None:
                     continue
                 e_refs = e.get('_refs', {})
                 if e['name'] and e_refs.get('name') is not None:
-                    out += _marks_of(dn, [(e['name'], e_refs['name'])], code_sym, f'端末{i}｜機器符号')
+                    # 一覧表の機器符号のどれかに一致する名前は ○（セルが × でも、合っている名前まで赤くしない。M06021 の CNCM）。合わない名前はセルの記号
+                    hit = code_sym != NA and any(code_matches_name(c, e['name']) for c in list_codes)
+                    out += _marks_of(dn, [(e['name'], e_refs['name'])], OK if hit else code_sym, f'端末{i}｜機器符号')
             # ユニットを決めた文字（照合のときに記録したもの。ここで判定し直さない）。色はユニットの判定だけ（モジュールの ？・× は一覧表のモジュールのセルに残す）
             for sym, text in cells[col(f'端末{i}', 'ユニット')][0].decided:
                 first = text.split('\n')[0]

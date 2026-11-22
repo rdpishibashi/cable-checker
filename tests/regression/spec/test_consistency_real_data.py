@@ -543,3 +543,13 @@ def test_m65123_and_m65124_are_read_from_jzb_blocks_wildcards_second_arrows_and_
     assert {('EE6888-639-01A', 'MOTOR', '○'), ('EE6888-639-01A', 'MAG BRG', '○'), ('EE6888-639-01A', 'TMP', '○')} <= marks
     assert sum(s['item'] == '芯線' for s in row['shapes']) == 2                        # 2本の芯線（図形）
 
+
+
+def test_end_names_matching_list_codes_are_green_even_when_the_cell_is_ng_m06021(result):
+    """守るもの（ユーザー報告 2026-11-22。EE6888-650-01C の M06021）: 一覧表 EE6888-306-51D の端末2 の機器符号は図面どおり `CNCM11UP,CN11DN` / `CNCM12`
+    （`CNCM11DN` ではなく `CN11DN`。一覧表の書き間違い）、端末1 は `CNCM` / `1.25-M4`（圧着端子の型番）。どちらのセルも × のまま（判定は変えない）だが、
+    viewer では一覧表の機器符号と合う名前（`CNCM`・`CNCM11UP`・`CNCM12`）は ○、合わない `CNCM11DN` だけが ×。"""
+    row = row_of(result, 'M06021')
+    assert (row['cells']['端末1｜機器符号'], row['cells']['端末2｜機器符号']) == ('×', '×')
+    marks = {(m['text'], m['symbol']) for m in row['marks'] if m['drawing'] == 'EE6888-650-01C' and m['item'].endswith('機器符号')}
+    assert marks == {('CNCM', '○'), ('CNCM11UP', '○'), ('CNCM12', '○'), ('CNCM11DN', '×')}

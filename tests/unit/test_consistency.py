@@ -23,7 +23,7 @@ COL = {k: item_column(*g) for k, g in {
     'sch': ('図面の対応', '展開接続図'),
     'u1': ('端末1', 'ユニット'), 'm1': ('端末1', 'モジュール'), 'c1': ('端末1', '機器符号'), 'p1': ('端末1', '部品種別'),
     'u2': ('端末2', 'ユニット'), 'm2': ('端末2', 'モジュール'), 'c2': ('端末2', '機器符号'), 'p2': ('端末2', '部品種別'),
-    'kind': ('ケーブル', '種類'), 'core': ('ケーブル', '芯数'),
+    'kind': ('ケーブル', '種類'), 'size': ('ケーブル', 'サイズ'), 'core': ('ケーブル', '芯数'),
     'num': ('芯線', '線番'), 'pin': ('芯線', 'PIN'), 'color': ('芯線', '色'),
 }.items()}
 
@@ -268,6 +268,92 @@ def test_part_type_match_is_literal_ignoring_spaces_and_case_only():
     by_name(ds, LIST_NAME)['list_rows'][0].update({'端末1_部品種別': 'd-sub 25P', 'ケーブル種類': 'AWG20'})
     assert sym(ds, 'p1') == OK
     assert sym(ds, 'kind') == NG                  # サイズ・芯数の形への読み替えはしない
+
+
+# ---------------------------------------------------------------- ケーブルのサイズ（一覧表のサイズ ⇔ 図面の AWG の数字）
+
+def _sized(size, *fab_texts, **kw):
+    """一覧表のサイズと製作図の記載の文字を設定した基準の図面セット。"""
+    ds = build()
+    by_name(ds, LIST_NAME)['list_rows'][0]['サイズ'] = size
+    by_name(ds, FAB_NAME)['fab_text_refs'] = _fab_refs(*fab_texts)
+    return ds
+
+
+@pytest.mark.parametrize('size, texts, expected', [
+    ('16', ['UL AWG16'], OK),
+    ('16', ['UL 16AWG-2C'], OK),                           # 数字が AWG の前（AWG に接している）でもよい
+    ('16', ['ULシールド線 AWG16-2C'], OK),
+    ('AWG16', ['AWG16'], OK),                             # 一覧表の値に AWG が付いていても数字で比べる
+    ('16', ['UL AWG14'], NG),
+    ('24', ['ULシールド線 AWG24-15C', 'UL1007 AWG22 GNYE'], OK),   # 複数の AWG は、どれか1つがサイズに合えば ○
+    ('26', ['AWG20(GNYE)'], NG),                          # アース線（GNYE）の AWG も数える
+    ('24', ['AWG2-4C'], NG),                              # `AWG2` と `AWG24` を取り違えない
+    ('1007', ['UL1007 AWG18'], NG),                       # AWG に接していない数字はサイズではない
+    ('16 | 14', ['AWG16', 'AWG14'], OK),                  # 複数値はすべてが合えば ○
+    ('16 | 14', ['AWG16'], NG),
+    ('16', ['UL1277 TC', 'AWG'], NA),                     # 数字のある AWG が無ければ比べない
+    ('', ['AWG16'], NA),                                  # 一覧表のサイズが空
+])
+def test_size_is_compared_with_the_awg_numbers_written_in_the_fab_drawing(size, texts, expected):
+    """守るもの: 一覧表のサイズは製作図の記載にある AWG の数字（`AWG16`・`16AWG`）と比べる。どれか1つが一致で ○、AWG はあるが合わなければ ×
+    （アース線 GNYE の AWG も数える）、AWG の数字が無ければ比べない（－）。"""
+    assert sym(_sized(size, *texts), 'size') == expected
+
+
+def test_size_without_a_fab_drawing_is_not_compared():
+    ds = _sized('16', 'AWG16')
+    by_name(ds, LIST_NAME)['list_rows'][0]['製作図パターン'] = 'EE****-999-99'
+    s, basis = cell(ds, 'size')
+    assert s == NA and '特定できない' in basis
+
+
+def test_size_basis_names_the_awg_found_in_the_drawing_when_it_does_not_match():
+    s, basis = cell(_sized('26', 'AWG20(GNYE)', 'UL AWG14'), 'size')
+    assert s == NG and '製作図 × 図面は AWG14、AWG20' in basis
+
+
+def test_size_does_not_change_the_cable_kind_comparison():
+    """守るもの: サイズの照合を足しても、ケーブル種類の照合は文字どおりの一致のまま（`AWG20` の種類を、サイズ・芯数の形に読み替えない）。"""
+    ds = _sized('20', 'D-SUB25PAWG20')
+    by_name(ds, FAB_NAME)['fab_text'] = 'D-SUB25PAWG20'
+    by_name(ds, LIST_NAME)['list_rows'][0].update({'端末1_部品種別': 'd-sub 25P', 'ケーブル種類': 'AWG-20'})
+    assert sym(ds, 'size') == OK and sym(ds, 'kind') == NG
+
+
+def test_size_is_compared_with_the_awg_in_the_schematic_remark_only():
+    """守るもの: 展開接続図は、選んだ出現の備考にある AWG の数字だけを同じ規則で比べる（備考に AWG が無ければ比較を足さない）。"""
+    base = lambda remark: with_schematic(_sized('16', 'AWG16'), remark=remark, row={'サイズ': '16'})   # noqa: E731
+    s, basis = cell(base('ULシールド線 AWG16-2C'), 'size')
+    assert s == OK and '展開接続図 ○' in basis
+    s, basis = cell(base('UL AWG14'), 'size')
+    assert s == NG and '展開接続図 × 図面は AWG14' in basis and '製作図 ○' in basis
+    s, basis = cell(base('ACCESSORY CABLE'), 'size')
+    assert s == OK and '展開接続図' not in basis
+
+
+def test_size_marks_the_list_cell_and_only_the_matching_awg_text_in_the_fab_drawing():
+    """守るもの: viewer は一覧表のサイズの文字と、製作図の AWG の文字を判定の記号で強調する。○ のときは一致した AWG の文字だけ
+    （アース線 `UL1007 AWG22 GNYE` は強調しない）、× のときは AWG の数字を含む文字すべて。"""
+    def marks(size, *texts):
+        ds = _sized(size, *texts)
+        by_name(ds, LIST_NAME)['list_rows'][0]['_refs'] = {'サイズ': [(size, (9.0, 9.0))]}
+        return [(m['drawing'], m['text'], m['symbol']) for m in check_consistency(ds)['rows'][0]['marks'] if m['item'] == 'ケーブル｜サイズ']
+    assert marks('24', 'ULシールド線 AWG24-15C', 'UL1007 AWG22 GNYE', 'D-SUB') == [
+        (LIST_NAME, '24', OK), (FAB_NAME, 'ULシールド線 AWG24-15C', OK)]
+    assert marks('26', 'AWG20(GNYE)', 'UL AWG14') == [
+        (LIST_NAME, '26', NG), (FAB_NAME, 'AWG20(GNYE)', NG), (FAB_NAME, 'UL AWG14', NG)]
+    assert marks('26', 'D-SUB') == [(LIST_NAME, '26', NA)]            # 図面に AWG が無い: 一覧表の文字は － のまま
+
+
+def test_size_marks_the_awg_text_below_the_cable_label_in_the_schematic():
+    """守るもの: ラベルのすぐ下の別の文字（`_remark_ref`）が備考で AWG を含むとき、その文字を サイズの比較の記号で強調する。"""
+    occ = occurrence(standard_wires(), remark='UL AWG14')
+    occ['_remark_ref'] = ('UL AWG14', (5.0, 5.0))
+    occ['_label_ref'] = (5.0, 8.0)
+    ds = with_schematic(_sized('16', 'AWG16'), occ=occ, row={'サイズ': '16'})
+    marks = check_consistency(ds)['rows'][0]['marks']
+    assert [(m['text'], m['symbol']) for m in marks if m['drawing'] == SCH_NAME and m['text'] == 'UL AWG14'] == [('UL AWG14', NG)]
 
 
 # ---------------------------------------------------------------- 機器符号と製作図の文字
@@ -545,6 +631,79 @@ def test_module_in_the_decided_text_or_title_is_ok_and_other_module_is_ng():
 def test_module_wildcard_or_empty_is_na():
     ds = with_schematic(build(), row={'端末1_モジュール': '**'})
     assert sym(ds, 'm1') == NA
+
+
+@pytest.mark.parametrize('unit_text', ['ALS1 **', 'ALS1 *', 'ALS1 ***', 'ALS1**', 'ALS1 ** (GEXUS)'])
+def test_module_is_matched_by_the_wildcard_in_the_unit_text_whatever_the_number_of_stars(unit_text):
+    """守るもの（ユーザー決定 2026-11-22。実図面 EE6888-639-01A の `TMP CONTR **`）: 図面のユニット名の `*` はモジュールの伏せ字で、文字数はモジュールと
+    一致しないことがある（`**` が `R1`、`F`、`R10` のどれにも当たる）。`*` が1つ以上あれば、数を問わずモジュールは ○。以前は `？`（記載が見つからない）。"""
+    wires = [wire(end('box', 'TBR1B', '1', regions=[unit_text]), end('box', 'CN1', 'A'))]
+    for module in ('R1', 'R10', 'F2'):
+        row = {'端末1_ユニット': 'ALS1', '端末1_モジュール': module}
+        s, basis = cell(with_schematic(build(), wires=wires, row=row), 'm1')
+        assert s == OK and 'ワイルドカード' in basis, (unit_text, module)
+
+
+def test_module_without_wildcard_or_other_module_is_not_matched_by_the_wildcard_rule():
+    """守るもの: ワイルドカードで ○ になるのは、ユニットの文字に `*` があるときだけ。`*` が無く記載も無ければ ？、別のモジュール（`R2`）があれば ×。"""
+    row = {'端末1_ユニット': 'ALS1', '端末1_モジュール': 'R1'}
+    for text, expected in (('ALS1', UNREAD), ('ALS1 R2', NG)):
+        wires = [wire(end('box', 'TBR1B', '1', regions=[text]), end('box', 'CN1', 'A'))]
+        assert sym(with_schematic(build(), wires=wires, row=row), 'm1') == expected, text
+
+
+def test_unit_text_is_marked_with_the_unit_symbol_only_not_mixed_with_the_module_symbol():
+    """守るもの（ユーザー決定 2026-11-22。実図面 EE6888-639-01A の M65124 の `TMP`）: viewer の展開接続図のユニットの文字は、ユニットの判定の記号だけで塗る。
+    モジュールが ？・× でも、ユニットが ○ なら文字は ○（以前は重いほうの記号になり、`TMP` が青になった）。モジュールの記号は一覧表のモジュールのセルに残る。"""
+    unit_end = end('box', 'TBR1B', '1', regions=['ALS1'])
+    unit_end['_refs'] = {'regions': {'ALS1': (1.0, 2.0)}}
+    wires = [wire(unit_end, end('box', 'CN1', 'A'))]
+    ds = with_schematic(build(), wires=wires, row={'端末1_ユニット': 'ALS1', '端末1_モジュール': 'R1'})
+    res, row = run(ds)
+    assert (row['cells'][COL['u1']], row['cells'][COL['m1']]) == (OK, UNREAD)
+    marks = [(m['text'], m['symbol']) for m in row['marks'] if m['item'] == '端末1｜ユニット' and m['drawing'] == SCH_NAME]
+    assert marks == [('ALS1', OK)]
+
+
+def test_end_names_matching_a_list_code_are_marked_ok_even_when_the_device_code_cell_is_ng():
+    """守るもの（ユーザー報告 2026-11-22。EE6888-650-01C の M06021）: 展開接続図の端の名前のうち、一覧表のその端末の機器符号のどれかに一致するものは
+    viewer で ○。合わない名前はセルの記号（×）。セルの判定は変えない（一覧表の `CN11DN` は図面の `CNCM11DN` と合わないので × のまま）。
+    以前は、セルが × だと合っている名前（`CNCM11UP`・`CNCM12`）まで赤になった。"""
+    def named(name, pin):
+        e = end('box', name, pin)
+        e['_refs'] = {'name': (float(len(name)), float(pin))}
+        return e
+    wires = [wire(named('TBR1B', '1'), named('CNCM11UP', '1')), wire(named('TBR1B', '2'), named('CNCM11DN', '2'))]
+    ds = with_schematic(build(), wires=wires, row={'端末2_機器符号': 'CNCM11UP,CN11DN'})
+    res, row = run(ds)
+    assert row['cells'][COL['c2']] == NG
+    marks = {(m['text'], m['symbol']) for m in row['marks'] if m['item'] == '端末2｜機器符号' and m['drawing'] == SCH_NAME}
+    assert marks == {('CNCM11UP', OK), ('CNCM11DN', NG)}
+
+
+def test_pin_matches_when_either_the_pin_or_the_wire_number_of_the_same_end_is_on_the_wire():
+    """守るもの（ユーザー決定 2026-11-23。見出しの「線番」と「PIN No.」が逆に書かれた製作図 EE3298-537-85C の M06006）: 同じ端に PIN No. と線番の
+    両方があれば、どちらを芯線のピンに当ててもよい（見出しは同義）。表の列のまとめ方を直したら、PIN No. の列の `X0100` だけが使われて × になった。"""
+    conn = {'端の数': 2, '端1_線番': '1', '端1_PIN No.': 'X0100', '端2_線番': '', '端2_PIN No.': '2'}
+    ds = with_schematic(build(), wires=[wire(end('box', 'TBR1B', '2'), end('box', 'CN1', '1'))])
+    by_name(ds, FAB_NAME).update(fab_conns=[conn])
+    assert sym(ds, 'pin') == OK
+    conn.update({'端1_線番': '7'})                  # どちらも芯線のピンに無ければ ×
+    assert sym(ds, 'pin') == NG
+
+
+def test_terminal_box_is_drawn_ok_when_its_name_matches_a_list_code_even_if_the_cell_is_ng():
+    """守るもの（ユーザー報告 2026-11-23。EE6888-650-01C の M06021）: viewer の端末の枠（コネクタのボックス）は、端の名前が一覧表のその端末の機器符号の
+    どれかに一致すれば ○（文字の強調と同じ規則）。合わない名前の枠はセルの記号。以前は枠がセルの記号（×）のままで、合っている CNCM のボックスも赤だった。"""
+    def boxed(name, pin, x):
+        e = end('box', name, pin)
+        e['_shape'] = {'rect': (x, 0.0, x + 1.0, 1.0)}
+        return e
+    wires = [wire(boxed('TBR1B', '1', 0), boxed('CNCM11UP', '1', 10)), wire(boxed('TBR1B', '2', 0), boxed('CNCM11DN', '2', 20))]
+    res, row = run(with_schematic(build(), wires=wires, row={'端末2_機器符号': 'CNCM11UP,CN11DN'}))
+    assert row['cells'][COL['c2']] == NG
+    rects = sorted((s['geom'][0], s['symbol']) for s in row['shapes'] if s['kind'] == 'rect' and s['item'] == '端末2｜機器符号')
+    assert rects == [(10.0, OK), (20.0, NG)]
 
 
 # ---------------------------------------------------------------- 展開接続図: 芯数・種類

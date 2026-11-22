@@ -3,6 +3,8 @@
 守るもの: セルの複数値の分解（` | `・カンマ）、比較用の正規化（空白除去・大文字・NFKC）、色のラベルの判定、線番設定表の接続先の側。
 consistency はこれらを再定義せず、cell_values のものを使う。
 """
+import pytest
+
 from model import cell_values as cv, consistency
 
 
@@ -48,3 +50,29 @@ def test_underscores_joining_words_become_spaces():
     assert underscores_to_spaces(unicodedata.normalize('NFKC', 'ＡＣＣＥＳＳＯＲＹ＿ＣＡＢＬＥ')) == 'ACCESSORY CABLE'
     assert underscores_to_spaces('SYSTEM_I/F_BOX_R1') == 'SYSTEM I/F BOX R1'
     assert underscores_to_spaces('_A_ (_B)') == '_A_ (_B)'
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('AWG16', {'16'}), ('UL AWG14-2C', {'14'}), ('AWG2-4C', {'2'}), ('AWG 24', {'24'}), ('ＡＷＧ２４', {'24'}),
+    ('UL1007 AWG18', {'18'}),                       # AWG に接していない 1007 は拾わない
+    ('UL444 type CM 18AWG-15C', {'18'}), ('8AWG', {'8'}),   # 数字が前
+    ('AWG20(GNYE)', {'20'}), ('AWG16~AWG10', {'16', '10'}), ('AWG1~AWG4/0', {'1', '4/0'}),
+    ('AWG', set()), ('AWG-15C', set()), ('※ケーブルサイズの単位はAWG、長さの単位はmとする。', set()), ('AWG≒mm2^ 配線径変換表', set()), ('', set()), (None, set()),
+])
+def test_awg_sizes_reads_the_number_next_to_awg(text, expected):
+    """守るもの: 図面の文字から、AWG の前後に接した数字（ケーブルのサイズ）だけを取る。前後に数字が続く場合は最長（`AWG2-4C` は 2、`AWG24` は 24）。
+    AWG に接していない数字・数字の無い AWG（単位の説明）は取らない。"""
+    assert cv.awg_sizes(text) == expected
+
+
+def test_size_key_drops_a_leading_awg_and_spaces():
+    assert cv.size_key('AWG 16') == '16' and cv.size_key(' 24 ') == '24' and cv.size_key('') == ''
+
+
+def test_device_code_wildcard_is_one_character_per_star_so_a_wire_number_star_does_not_match():
+    """守るもの: 機器符号の `*` は1つで1文字（文字数を問わない形にしない）。製作図の `*2`（線番の記号）・`***`（伏せ字）が、一覧表の `CN2`・`RS-232C` に
+    一致してはいけない（文字数を問わない形にして全データで測ると、6セルが誤って一致した。M39004・M39005・M65260・M65A06）。モジュールの `*`
+    （consistency の展開接続図のモジュールの照合）は別の規則で、数を問わない。"""
+    assert not cv.code_matches_name('CN2', '*2') and not cv.code_matches_name('RS-232C', '***')
+    assert cv.code_matches_name('CNSHPR1', 'CNSHP**') and not cv.code_matches_name('CNSHPR1', 'CNSHP*')
+

@@ -61,11 +61,59 @@ def test_hidden_entities_are_not_collected(tmp_path):
 
 
 def test_frame_and_revision_inserts_are_skipped(tmp_path):
+    """守るもの: 図面枠（大きな JZB ブロック）と改訂記号（SX_DeltaSymbol）の中の文字は読まない。図面枠は一辺 150 以上（実データの枠は 175 以上）。
+    小さな JZB ブロック（記載）の文字は読む（`test_small_jzb_block_text_is_read_but_a_large_one_is_a_drawing_frame`）。"""
     doc, msp = new_doc()
     for name in ('JZB_A3', 'SX_DeltaSymbolB', 'OTHER'):
-        doc.blocks.new(name).add_text(name, dxfattribs={'insert': (0, 0), 'height': 3})
+        block = doc.blocks.new(name)
+        block.add_text(name, dxfattribs={'insert': (0, 0), 'height': 3})
+        if name == 'JZB_A3':
+            block.add_lwpolyline([(0, 0), (420, 0), (420, 297), (0, 297)], close=True)   # A3 の図面枠
         msp.add_blockref(name, (0, 0))
     assert [t.s for t in load(doc, tmp_path).txts] == ['OTHER']
+
+
+def _jzb(doc, msp, name, size, word, scale=1.0):
+    """文字 word と、一辺 size の線2本（外接矩形が size×size）を持つ JZB ブロックを置く。"""
+    block = doc.blocks.new(name)
+    block.add_text(word, dxfattribs={'insert': (1, 1), 'height': 3})
+    block.add_line((0, 0), (size, 0))
+    block.add_line((0, 0), (0, size))
+    block.add_lwpolyline([(0, 0), (size, 0), (size, size)])
+    msp.add_blockref(name, (0, 0), dxfattribs={'xscale': scale, 'yscale': scale})
+
+
+@pytest.mark.parametrize('size, scale, read', [(100, 1.0, True), (110, 1.0, True), (149, 1.0, True), (175, 1.0, False), (200, 1.0, False),
+                                               (100, 2.0, False)])
+def test_small_jzb_block_text_is_read_but_a_large_one_is_a_drawing_frame(tmp_path, size, scale, read):
+    """守るもの（ユーザー報告 2026-11-22。EE3298-553-12D の M65123: 製作図の `ACCESSORY CABLE`・`付属コネクタ` は小さな JZB ブロックの中にある）:
+    ブロック `JZB_*` の外接矩形の長辺（×尺度）が 150 未満なら記載のブロックなので中の文字を読み、150 以上なら図面枠・情報枠なので読まない。
+    ケーブル図 106枚の JZB は 110 以下（記載）と 175 以上（枠）に分かれる。以前は JZB をすべて図面枠として読み飛ばし、記載の文字が製作図に入らなかった。"""
+    doc, msp = new_doc()
+    _jzb(doc, msp, 'JZB_0003', size, 'ACCESSORY CABLE', scale)
+    assert [t.s for t in load(doc, tmp_path).txts] == (['ACCESSORY CABLE'] if read else [])
+
+
+def test_lines_inside_a_small_jzb_block_are_not_collected(tmp_path):
+    """守るもの: 小さな JZB ブロックは文字だけを読み、中の線・ポリライン・弧は電線の連結に混ぜない。混ぜると製作図の接続が 457→456、芯線が
+    791→789 に減り、○ だった PIN が × になる判定の悪化が5件出た（EE6888-639-01A ほか。実データで測った）。"""
+    doc, msp = new_doc()
+    _jzb(doc, msp, 'JZB_0003', 100, '付属コネクタ')
+    geo = load(doc, tmp_path)
+    assert [t.s for t in geo.txts] == ['付属コネクタ'] and geo.lines == [] and geo.polys == []
+
+
+def test_text_in_a_block_nested_in_a_small_jzb_block_is_read_and_its_lines_are_not(tmp_path):
+    doc, msp = new_doc()
+    inner = doc.blocks.new('INNER')
+    inner.add_text('NESTED', dxfattribs={'insert': (0, 0), 'height': 3})
+    inner.add_line((0, 0), (5, 0))
+    outer = doc.blocks.new('JZB_0004')
+    outer.add_blockref('INNER', (2, 2))
+    outer.add_line((0, 0), (80, 0))
+    msp.add_blockref('JZB_0004', (0, 0))
+    geo = load(doc, tmp_path)
+    assert [t.s for t in geo.txts] == ['NESTED'] and geo.lines == []
 
 
 def test_polyline_edges_and_arc_ends_are_collected_separately(tmp_path):
@@ -265,6 +313,31 @@ def test_fab_tables_and_straight_connections_with_label(tmp_path):
     first = next(r for r in rows if r['端1_行'] == 1)
     assert (first['端1_線番'], first['端1_PIN No.'], first['端2_PIN No.'], first['ラベル']) == ('*1', 'A', '1', '(BK)')
     assert first['端1_位置'] == '左' and first['端2_位置'] == '右'
+
+
+def test_fab_columns_with_different_row_counts_form_one_table(tmp_path):
+    """守るもの（ユーザー報告 2026-11-23。EE3298-545-28A の左の表 CNCM: 線番の列だけ下に1行多い）: 隣り合う列の行の区切りが上から同じなら、
+    行数が違っても1つの表にまとめ、電線がつながる行が 線番 と PIN の両方を持つ。以前は行数が同じ列だけをまとめたため、線番の列が別の表になり、
+    接続の端に線番が無かった（viewer で左の表の線番が強調されなかった）。行が無い列の値は空。"""
+    doc, msp = new_doc()
+    for x, bottom in ((10, 74), (30, 74), (50, 82)):
+        line(msp, (x, bottom), (x, 105))
+    for y in (105, 98, 90, 82):
+        line(msp, (10, y), (50, y))
+    line(msp, (10, 74), (30, 74))                 # 線番の列だけ1行多い
+    text(msp, '線番', 14, 100)
+    text(msp, 'PIN No.', 34, 100)
+    for v, x, y in (('*1', 14, 93), ('*2', 14, 85), ('SH', 14, 77), ('A', 34, 93), ('B', 34, 85)):
+        text(msp, v, x, y)
+    draw_table(msp, [100, 120, 140], ['PIN No.', '線番'], [('1', '2'), ('', '')])
+    line(msp, (50, 94), (100, 94))
+    res, _pairs = conns(tmp_path, doc)
+    left = min(res['tables'], key=lambda t: t['x0'])
+    assert [c['kind'] for c in left['cols']] == ['線番', 'PIN'] and len(left['rows']) == 3
+    assert (left['rows'][2]['線番'], left['rows'][2]['PIN']) == ('SH', '')
+    (row,) = fab_drawing.connection_rows(res)
+    assert (row['端1_線番'], row['端1_PIN No.'], row['端2_PIN No.']) == ('*1', 'A', '1')
+    assert row['_端1_refs']['線番'][0][0] == '*1'
 
 
 def test_fab_wire_ending_up_to_0_5_short_of_the_table_edge_still_connects_that_row(tmp_path):

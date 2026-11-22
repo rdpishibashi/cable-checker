@@ -35,8 +35,8 @@ import ezdxf
 from . import cable_list_table, fab_drawing, wire_number_table
 from .cable_compare import compare_extracts
 from .cable_extractor import extract_cables
-from .cell_values import SEP, code_matches_name, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
-from .cell_values import side as _side, squash as _squash, values as _values
+from .cell_values import SEP, awg_sizes, code_matches_name, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
+from .cell_values import side as _side, size_key, squash as _squash, values as _values
 from . import highlights
 from .drawing_geometry import load
 from .schematic_reader import analyze_schematic
@@ -61,7 +61,7 @@ PHASE_SCHEMATIC = '展開接続図の読み取り'
 ITEMS = [
     ('図面の対応', '一覧表'), ('図面の対応', '製作図'), ('図面の対応', '線番設定表'), ('図面の対応', '展開接続図'),
     *[(f'端末{i}', x) for i in (1, 2) for x in ('ユニット', 'モジュール', '機器符号', '部品種別')],
-    ('ケーブル', '種類'), ('ケーブル', '芯数'),
+    ('ケーブル', '種類'), ('ケーブル', 'サイズ'), ('ケーブル', '芯数'),
     ('芯線', '線番'), ('芯線', 'PIN'), ('芯線', '色'),
 ]
 
@@ -690,6 +690,9 @@ def _terminal_cells(ctx, row, i, sel, mine, pick, fabs=(), fab_ok=False):
                     if any(m in _nfkc_squash(t) for t in decided) or (decided and m in _nfkc_squash(title)):
                         mod_cell.add('展開接続図', OK, '一致（ユニットの文字）' if any(m in _nfkc_squash(t) for t in decided)
                                      else '一致（図面タイトル）')
+                    elif any('*' in t for t in decided):
+                        # 図面のユニット名の `*`（`TMP CONTR **`）はモジュールの伏せ字。文字数はモジュールと一致しないことがあるので、数は問わない
+                        mod_cell.add('展開接続図', OK, '一致（ユニットの文字のワイルドカード）')
                     elif decided:
                         others = set().union(*(_module_tokens(t) for t in decided))
                         if others:
@@ -736,6 +739,43 @@ def _fab_text_cell(label, values, fabs, fab_ok):
         cell.source(*(d['drawing_number'] for d in fabs))
         cell.value('製作図', '、'.join(v for v in values if v not in missing))
         cell.add('製作図', NG if missing else OK, f'図面に無い: {"、".join(missing)}' if missing else B_MATCH)
+    return cell
+
+
+def _size_cell(row, ch, pick):
+    """ケーブルの サイズ（一覧表のサイズ ⇔ 図面の AWG の数字）のセル。
+
+    製作図: 記載の文字（注記ブロックを除く）にある AWG の数字のうち、一覧表のサイズの値のすべてが含まれれば ○。AWG はあるが合わなければ ×
+    （アース線 GNYE の AWG も数える）。AWG の記載が無ければ比べない。展開接続図: 選んだ出現の備考にある AWG の数字だけを同じ規則で比べる。"""
+    values = _values(row.get('サイズ'))
+    cell = _Cell('ケーブル サイズ').value('一覧表', SEP.join(values))
+    if not values:
+        cell.note = B_EMPTY
+        return cell
+    keys = [size_key(v) for v in values]
+
+    def compare(kind, found):
+        ok = all(k in found for k in keys)
+        shown = '、'.join(f'AWG{n}' for n in sorted(found, key=lambda n: (len(n), n)))
+        cell.add(kind, OK if ok else NG, B_MATCH if ok else f'図面は {shown}')
+        cell.value(kind, shown)
+
+    if not ch['fab_ok']:
+        cell.note = '製作図の図面が特定できない'
+    else:
+        found = set()
+        for d in ch['fabs']:
+            for t, _ in d.get('fab_text_refs', []):
+                found |= awg_sizes(t)
+        if found:
+            compare('製作図', found)
+            cell.source(*(d['drawing_number'] for d in ch['fabs']))
+        else:
+            cell.note = '製作図に AWG の記載が無い'
+    found_405 = awg_sizes(pick['occ']['remark']) if pick is not None else set()
+    if found_405:
+        compare('展開接続図', found_405)
+        cell.source(pick['drawing']['drawing_number'])
     return cell
 
 
@@ -813,6 +853,18 @@ def _conn_vals(c):
     return vals
 
 
+def _conn_choices(c):
+    """製作図の接続の左右の値の組の候補（`Counter` のリスト）。同じ端に PIN No. と線番の両方があれば、どちらを芯線のピンに当ててもよい
+    （見出しの「線番」と「PIN No.」は同義。見出しが逆に書かれた図面 EE3298-537-85C がある。ユーザー決定 2026-11-23）。`*n` は n。"""
+    alts = []
+    for k in (1, 2):
+        vs = [_squash(v.strip().lstrip('*')) for v in (c.get(f'端{k}_PIN No.') or '', c.get(f'端{k}_線番') or '')]
+        vs = list(dict.fromkeys(v for v in vs if v))
+        if vs:
+            alts.append(vs)
+    return [Counter(choice) for choice in itertools.product(*alts)] if alts else []
+
+
 def _conn_info(d, c, wire_row):
     """製作図の端が2つの接続1本の事実。`*n` は線番設定表の行の値で置き換える。"""
     raw = c.get('端1_線番') or c.get('端2_線番') or ''
@@ -825,7 +877,8 @@ def _conn_info(d, c, wire_row):
     labels = [x.strip() for x in (c.get('ラベル') or '').split(' | ') if x.strip()]
     # 表の見出し「線番」と「PIN No.」は同義。左の値・右の値の組として、芯線の両端のピンに当てる（同じ端に両方あれば PIN No.）。`*n` は n 番目の端子（n）として扱う
     return {'drawing': d['drawing_number'], 'pins': (c.get('端1_PIN No.') or '', c.get('端2_PIN No.') or ''),
-            'raw': raw, 'id': conn_id, 'number': resolved, 'colors': [x for x in labels if _is_color(x)], 'vals': _conn_vals(c)}
+            'raw': raw, 'id': conn_id, 'number': resolved, 'colors': [x for x in labels if _is_color(x)], 'vals': _conn_vals(c),
+            'choices': _conn_choices(c)}
 
 
 def _wire_matrix(fab_conns, wire_row, pick, multi):
@@ -849,11 +902,10 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
     pin_keys = {_squash(x) for w in wires for x in w['pins'].values() if x}
     used, assign = set(), {}
     for j, c in enumerate(conns):
-        fp = Counter(c['vals'])
-        if not fp or not comparable or all(v in _DRAIN for v in fp):
+        if not c['choices'] or not comparable or all(v in _DRAIN for v in c['vals']):
             continue
         for wi, w in enumerate(wires):
-            if wi not in used and not (fp - w['pool']):
+            if wi not in used and any(not (fp - w['pool']) for fp in c['choices']):
                 used.add(wi)
                 assign[j] = wi
                 break
@@ -876,8 +928,8 @@ def _wire_matrix(fab_conns, wire_row, pick, multi):
         for j, c in enumerate(conns):
             if j in assign or not c['vals'] or all(v in _DRAIN for v in c['vals']):
                 continue
-            fp = Counter(c['vals'])
-            scored = [(sum(min(n, w['pool'][v]) for v, n in fp.items()), wi) for wi, w in enumerate(wires) if wi not in used]
+            scored = [(max(sum(min(n, w['pool'][v]) for v, n in fp.items()) for fp in c['choices']), wi)
+                      for wi, w in enumerate(wires) if wi not in used]
             best = max(scored, default=(0, None))
             if best[0] > 0:
                 used.add(best[1])
@@ -1181,6 +1233,7 @@ def _evaluate_row(ctx, list_name, row):
             cells[item_column(f'端末{i}', name)] = [c]
     kind_cell, core_cell = _count_cells(row, ch, sel, mine, fab_conns, pick, multi)
     cells[item_column('ケーブル', '種類')] = [kind_cell]
+    cells[item_column('ケーブル', 'サイズ')] = [_size_cell(row, ch, pick)]
     cells[item_column('ケーブル', '芯数')] = [core_cell]
     num_cell, pin_cell, color_cell, mat, wr = _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns, sibling_sel)
     cells[item_column('芯線', '線番')] = [num_cell]
@@ -1216,7 +1269,7 @@ def _evaluate_row(ctx, list_name, row):
              'sel': [(x['drawing']['drawing_number'], x['row']['表'], x['row']['行']) for x in sel],
              'schematic': pick['drawing']['drawing_number'] if pick is not None else ''}
     marks = highlights.row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns)
-    shapes = highlights.row_shapes(cells, pick, mat, fab_conns)
+    shapes = highlights.row_shapes(cells, pick, mat, fab_conns, row)
     return cells, wire_rows, marks, focus, shapes
 
 

@@ -7,8 +7,8 @@
 """
 import re
 
-from .cell_values import code_matches_name, codes as _codes, is_color as _is_color, item_column, side as _side, squash as _squash, values as _values
-from .symbols import NA, worst as _worst
+from .cell_values import awg_sizes, code_matches_name, codes as _codes, is_color as _is_color, item_column, side as _side, size_key, squash as _squash, values as _values
+from .symbols import NA, OK, worst as _worst
 
 
 def _cmp(cells, col, kind):
@@ -38,7 +38,8 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
     # --- 一覧表: セルごとの記号（最も重い比較）
     refs = row.get('_refs', {})
     list_map = [(('図面の対応', '一覧表'), ['ケーブル番号']), (('図面の対応', '製作図'), ['製作図パターン']),
-                (('図面の対応', '展開接続図'), ['接続図パターン']), (('ケーブル', '種類'), ['ケーブル種類']), (('ケーブル', '芯数'), ['芯数'])]
+                (('図面の対応', '展開接続図'), ['接続図パターン']), (('ケーブル', '種類'), ['ケーブル種類']), (('ケーブル', 'サイズ'), ['サイズ']),
+                (('ケーブル', '芯数'), ['芯数'])]
     for i in (1, 2):
         list_map += [((f'端末{i}', n), [f'端末{i}_{n}']) for n in ('ユニット', 'モジュール', '機器符号', '部品種別')]
     for (g, n), fields in list_map:
@@ -82,27 +83,43 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
                 else:
                     hit = [(t, ref) for t, ref in d.get('fab_text_refs', []) if key and key in _squash(t)]
                 out += _marks_of(dn, hit, sym, f'{g}｜{n}')
+        # サイズ: ○ のときは一覧表のサイズに合う AWG の文字だけ、× のときは AWG の数字を含む文字すべて（アース線の AWG を含む）
+        size_sym = _cmp(cells, col('ケーブル', 'サイズ'), '製作図')
+        if size_sym is not None:
+            keys = {size_key(v) for v in _values(row.get('サイズ'))}
+            hit = [(t, ref) for t, ref in d.get('fab_text_refs', [])
+                   if awg_sizes(t) and (size_sym != OK or awg_sizes(t) & keys)]
+            out += _marks_of(dn, hit, size_sym, 'ケーブル｜サイズ')
     # --- 展開接続図（照合に使った出現）
     if pick is not None:
         dn, occ, orient = pick['drawing']['drawing_number'], pick['occ'], pick['orient']
         label_sym = _combine(_cmp(cells, col('図面の対応', '展開接続図'), '展開接続図'), _cmp(cells, col('ケーブル', '種類'), '展開接続図'))
+        if _cmp(cells, col('ケーブル', 'サイズ'), '展開接続図') and not occ.get('_remark_ref'):
+            label_sym = _combine(label_sym, _cmp(cells, col('ケーブル', 'サイズ'), '展開接続図'))   # AWG はラベル自身の文字（番号の後ろ）にある
         out += _marks_of(dn, [(occ['cable'], occ.get('_label_ref'))], label_sym, '図面の対応｜展開接続図')
         # ラベルのすぐ下の別の文字を備考にしたとき（`ACCESSORY CABLE`）は、その文字を「ケーブル｜種類」の展開接続図の比較の記号で強調する
         remark_sym = _cmp(cells, col('ケーブル', '種類'), '展開接続図')
-        if occ.get('_remark_ref') and remark_sym:
-            out += _marks_of(dn, [occ['_remark_ref']], remark_sym, 'ケーブル｜種類')
+        # 備考の AWG の数字（サイズの比較）: ラベルの下の別の文字にあればその文字を、ラベル自身にあればラベルの強調に重ねる
+        size_sym = _cmp(cells, col('ケーブル', 'サイズ'), '展開接続図')
+        remark_ref = occ.get('_remark_ref')
+        if remark_ref and size_sym and awg_sizes(remark_ref[0]):
+            remark_sym = _combine(remark_sym, size_sym)
+        if remark_ref and remark_sym:
+            out += _marks_of(dn, [remark_ref], remark_sym, 'ケーブル｜種類')
         for i in (1, 2):
             side = orient['sides'][i]
             code_sym = _combine(_cmp(cells, col(f'端末{i}', '機器符号'), '展開接続図'))
+            list_codes = _codes(row.get(f'端末{i}_機器符号'))
             for w in occ['wires']:
                 e = w['ends'].get(side)
                 if not e or e['kind'] is None:
                     continue
                 e_refs = e.get('_refs', {})
                 if e['name'] and e_refs.get('name') is not None:
-                    out += _marks_of(dn, [(e['name'], e_refs['name'])], code_sym, f'端末{i}｜機器符号')
-            # ユニットを決めた文字（照合のときに記録したもの。ここで判定し直さない）
-            module_sym = _cmp(cells, col(f'端末{i}', 'モジュール'), '展開接続図')
+                    # 一覧表の機器符号のどれかに一致する名前は ○（セルが × でも、合っている名前まで赤くしない。M06021 の CNCM）。合わない名前はセルの記号
+                    hit = code_sym != NA and any(code_matches_name(c, e['name']) for c in list_codes)
+                    out += _marks_of(dn, [(e['name'], e_refs['name'])], OK if hit else code_sym, f'端末{i}｜機器符号')
+            # ユニットを決めた文字（照合のときに記録したもの。ここで判定し直さない）。色はユニットの判定だけ（モジュールの ？・× は一覧表のモジュールのセルに残す）
             for sym, text in cells[col(f'端末{i}', 'ユニット')][0].decided:
                 first = text.split('\n')[0]
                 for w in occ['wires']:
@@ -112,7 +129,7 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
                     e_refs = e.get('_refs', {})
                     ref = e_refs.get('regions', {}).get(text) or e_refs.get('devices', {}).get(text) or e_refs.get('nearby', {}).get(first)
                     if ref is not None:
-                        out += _marks_of(dn, [(text, ref)], _combine(sym, module_sym), f'端末{i}｜ユニット')
+                        out += _marks_of(dn, [(text, ref)], sym, f'端末{i}｜ユニット')
                         break
         for r in mat['rows']:
             w = (r.get('wire') or {}).get('src')
@@ -137,13 +154,14 @@ def _wire_symbol(r):
     return _worst(syms) if syms else NA
 
 
-def row_shapes(cells, pick, mat, fab_conns):
+def row_shapes(cells, pick, mat, fab_conns, row=None):
     """一覧表の1行の照合結果に対応する、図面上の図形の強調（viewer 用）。
 
     [{'drawing', 'kind': 'lines'|'ellipse'|'capsule'|'rect'|'circle', 'geom', 'symbol', 'item'}]（geom は DXF 座標。lines は線分の
     リスト、ellipse・capsule・rect は外接矩形、circle は (中心, 半径)）。照合の記号・根拠は変えない。
     製作図: 接続の線＝その接続の判定。展開接続図: 引出線・記号＝「図面の対応｜展開接続図」、芯線＝割り当てた接続の判定（**両端に端末が
-    ある芯線だけ**。端末の無い芯線は塗らない）、端末＝「端末｜機器符号」。機器の箱は塗らない。"""
+    ある芯線だけ**。端末の無い芯線は塗らない）、端末＝「端末｜機器符号」（端の名前が一覧表の機器符号のどれかに一致すれば ○。文字の強調と同じ規則）。
+    機器の箱は塗らない。"""
     out = []
     for j, (d, c) in enumerate(fab_conns):
         r = mat['rows'][j] if j < len(mat['rows']) else None
@@ -173,10 +191,14 @@ def row_shapes(cells, pick, mat, fab_conns):
             out.append(_shape(dn, 'lines', w['_path'], _wire_symbol(r) if r else NA, '芯線'))
     for i in (1, 2):
         code_sym = _combine(_cmp(cells, item_column(f'端末{i}', '機器符号'), '展開接続図'))
+        list_codes = _codes((row or {}).get(f'端末{i}_機器符号'))
         for w in occ['wires']:
-            shape = (w['ends'].get(orient['sides'][i]) or {}).get('_shape')
+            e = w['ends'].get(orient['sides'][i]) or {}
+            shape = e.get('_shape')
+            hit = code_sym != NA and bool(e.get('name')) and any(code_matches_name(c, e['name']) for c in list_codes)
+            sym = OK if hit else code_sym
             if shape and 'rect' in shape:
-                out.append(_shape(dn, 'rect', shape['rect'], code_sym, f'端末{i}｜機器符号'))
+                out.append(_shape(dn, 'rect', shape['rect'], sym, f'端末{i}｜機器符号'))
             elif shape and 'circle' in shape:
-                out.append(_shape(dn, 'circle', shape['circle'], code_sym, f'端末{i}｜機器符号'))
+                out.append(_shape(dn, 'circle', shape['circle'], sym, f'端末{i}｜機器符号'))
     return out

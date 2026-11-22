@@ -62,3 +62,20 @@ def is_color(label):
 def side(orient, i):
     """線番設定表の接続先のうち、端末 i（1・2）に対応する側（0=接続先1・1=接続先2）。fwd=接続先1が端末1、rev=接続先1が端末2。"""
     return (i - 1) if orient == 'fwd' else (2 - i)
+
+
+# AWG の数字（ケーブルのサイズ）。`AWG24`・`AWG24-15C`・`AWG 20(GNYE)`（AWG の後ろ）と、`18AWG-15C`・`8AWG`（AWG に空白なしで接する前の数字）。
+# 数字は前後に別の数字が続かない最長の並び（`AWG2-4C` は 2、`AWG24` は 24）。`UL1007 AWG18` の 1007 は AWG に接していないので拾わない。
+_AWG_AFTER = re.compile(r'AWG\s*#?\s*(\d+(?:/0)?)')
+_AWG_BEFORE = re.compile(r'(?<![0-9./])(\d+(?:/0)?)AWG')
+
+
+def awg_sizes(text):
+    """図面の文字から AWG の数字（文字列）の集合を取る。NFKC で半角にそろえ、大文字にしてから読む。AWG が無ければ空。"""
+    s = unicodedata.normalize('NFKC', text or '').upper()
+    return set(_AWG_AFTER.findall(s)) | set(_AWG_BEFORE.findall(s))
+
+
+def size_key(value):
+    """一覧表のサイズの値を、図面の AWG の数字と比べる形（空白除去・大文字・NFKC、先頭の `AWG` を除く）にする。"""
+    return re.sub(r'^AWG', '', nfkc_squash(value))

@@ -23,7 +23,7 @@ import ezdxf.path
 
 from .cable_extractor import CABLE_BODY, extract_cables
 from .drawing_geometry import norm, text_anchor
-from .label_classifier import REGION_NAME, classify_label
+from .label_classifier import DESIGNATOR, REGION_NAME, classify_label
 from .region_detector import DEFAULT_REGION_CONFIG, _point_in_polygon, analyze_dxf_regions
 
 WNO = re.compile(r'(?<![0-9A-Z])W\s*NO\.?\s*(' + CABLE_BODY + r')(?![0-9A-Z])', re.I)
@@ -433,6 +433,27 @@ def link_labels(g, labels, arrows, grid):
     return labels
 
 
+def sibling_arrows(lab, arrows, chains, owned, tol=0.3):
+    """ラベルの矢印と引出線を共有する、ほかの矢印（同じケーブルの別の線を指す）。[(矢印, その鎖)]（先端の順）。
+
+    1本の引出線の途中に矢印が2つ以上ある図（EE6888-639-01A の M65124: 縦の引出線が1つ目の矢じりを通り越して2つ目の矢じりで終わる）では、
+    ラベルに最も近い矢印は1つだけなので、残りの矢印の先の線が芯線にならない。ここでは、引出線の鎖が線分を共有する矢印を同じケーブルのものとする。
+    除くもの: 他のラベルに割り当てた矢印（`owned`）、先端が、すでに使った矢印の先端から `tol` 以内のもの（重なった二重線から同じ矢印が二度見つかる）。"""
+    a0 = lab.get('arrow')
+    if not a0 or a0.get('leader_entity'):
+        return []
+    mine = set(lab.get('chain', [])) | set(a0.get('heads', ()))
+    used = [a0['tip']]
+    out = []
+    for a in sorted(arrows, key=lambda x: x['tip']):
+        if a is a0 or id(a) in owned or any(math.dist(a['tip'], p) <= tol for p in used):
+            continue
+        if mine & set(chains[id(a)]):
+            used.append(a['tip'])
+            out.append((a, chains[id(a)]))
+    return out
+
+
 # ---------------------------------------------------------------- ケーブル記号と芯線
 
 def _bbox(pts):
@@ -729,6 +750,11 @@ def narrow_rects(g, min_size=2.0, short_max=NARROW_MAX, long_max=NARROW_LONG_MAX
     return out
 
 
+# 芯線をたどるとき、次の線分に認める最小の長さ。芯線の途中の小さな段差（縦の線分。EE6888-637-01A の M39065 は高さ 1.0）を越えるため、
+# 実データで結果が変わらない範囲（0.0〜0.9 で M39065 の1件だけ）のうち、余裕をとって 0.5 にする
+MIN_CHAIN_LENGTH = 0.5
+
+
 def trace_wire(g, grid, k, start_pt=None, max_steps=60):
     """芯線 k を両方向に端点でつながる線分でたどり、両端点と経路を返す。分岐点で止める。
 
@@ -753,7 +779,7 @@ def trace_wire(g, grid, k, start_pt=None, max_steps=60):
                 elif math.dist(t.b, cur) < 0.08:
                     nxt.append((j, t.a))
             # 同じ色の線を優先（コネクタの矢じりなど別の色の短い線に入らない）
-            same = [(j, q) for j, q in nxt if g.segs[j].color == s.color and g.segs[j].length > 1.2]
+            same = [(j, q) for j, q in nxt if g.segs[j].color == s.color and g.segs[j].length > MIN_CHAIN_LENGTH]
             if len(same) == 1:
                 j, cur = same[0]
                 path.append(j)
@@ -1160,7 +1186,8 @@ def gapped_frame_regions(g, known_regions=()):
     長方形の部品で途切れた辺の橋渡しは横線だけ。ユニットの枠がコネクタや端子の円に重なって描かれる図（EE6892-611-01B の
     `MBX2 R1`）では、領域も機器の箱も見つからず、ユニットが読めない。ここでは、辺の隙間が部品・コネクタ名の文字だけで埋まるときに限って、枠を閉じた矩形とする。
     部品で橋渡しした辺が1本もない（途切れのない）矩形は、機器の箱（`axis_rects`）と区別がつかないので返さない。
-    名称候補は、枠の中にあり枠の辺から GAP_NAME_DIST 以内で、部品の枠の中でない領域名候補の文字（辺に近い順。1行目）。
+    名称候補は、枠の中にあり枠の辺から GAP_NAME_DIST 以内で、部品の枠の中でない領域名候補・機器符号候補の文字（辺に近い順。1行目）。
+    機器符号候補も含めるのは、`TMP` のような英字だけの短い名称が機器符号候補に分類されるため（EE6888-639-01A の M65124 の `TMP` の枠）。
     Returns: 領域の dict（`polygon`・`area`・`name_candidates`）のリスト。`known_regions` と外接矩形が同じものは除く。
     """
     devices = list(axis_rects(g, 2.0, 60.0))
@@ -1214,7 +1241,7 @@ def gapped_frame_regions(g, known_regions=()):
                 continue
             d = min(t.cx - x0, x1 - t.cx, t.cy - y0, y1 - t.cy)
             first = t.s.split('\n')[0].strip()
-            if d <= GAP_NAME_DIST and first and classify_label(first) == REGION_NAME \
+            if d <= GAP_NAME_DIST and first and classify_label(first) in (REGION_NAME, DESIGNATOR) \
                     and not any(r[0] <= t.cx <= r[2] and r[1] <= t.cy <= r[3] for r in devices):
                 cands.append((round(d, 2), first))
         if cands:
@@ -1300,7 +1327,7 @@ def _end_info(g, grid, device_rects, regions, E, term, inner):
     at = term.get('name_pt') or (inner if inner else None)
     region_refs = {}
     for cand in names:
-        same = [t for t in g.txts if cand in (t.s, t.s.split('\n')[0].strip(), t.s.strip())]
+        same = [t for t in g.txts if cand in (t.s, t.s.split('\n')[0].strip(), t.s.strip(), ' '.join(t.s.split()))]   # 名称候補は改行を空白にした全文のこともある
         if same and at:
             region_refs[cand] = min(same, key=lambda t: math.dist((t.cx, t.cy), at)).ref
         elif same:
@@ -1418,18 +1445,31 @@ def analyze_schematic(path, name, title=None, doc=None):
     rects = axis_rects(g, 2.0, 60.0)             # コネクタ枠・端子台
     narrow = narrow_rects(g)                     # 細長いコネクタ枠（芯線に直交するものだけ端末にする）
     device_rects = axis_rects(g, 2.0, 150.0)     # 機器の箱
-    labels = link_labels(g, cable_labels(g), find_arrows(g, grid), grid)
+    arrows = find_arrows(g, grid)
+    labels = link_labels(g, cable_labels(g), arrows, grid)
+    chains = {id(a): leader_chain(g, grid, a) for a in arrows}
+    owned = {id(lab['arrow']) for lab in labels if lab.get('arrow')}
     for lab in labels:
         symbols, how = find_symbols(g, grid, lab)
         wires, seen = [], set()
         arrow = lab.get('arrow') or {}
-        leader = (_segs_of(g, list(lab.get('chain', [])) + list(arrow.get('heads', ())))
+        # (記号, 記号を探した矢印の先端): ラベルの矢印と、同じ引出線の別の矢印
+        targets = [(symbols, arrow.get('tip'))]
+        leader_segs = list(lab.get('chain', [])) + list(arrow.get('heads', ()))
+        for a2, ch2 in sibling_arrows(lab, arrows, chains, owned):
+            syms2, how2 = find_symbols(g, grid, dict(lab, arrow=a2, chain=ch2))
+            if syms2:
+                targets.append((syms2, a2['tip']))
+                leader_segs += [k for k in list(ch2) + list(a2['heads']) if k not in leader_segs]
+                if not symbols:
+                    how = how2
+        leader = (_segs_of(g, leader_segs)
                   + [[tuple(p), tuple(q)] for p, q in zip(arrow.get('verts', []), arrow.get('verts', [])[1:])])
-        sym_shapes = [{'shape': sym.get('shape', 'ellipse'), 'box': tuple(sym['box'])} for sym in symbols if 'box' in sym]
-        for sym in symbols:
+        sym_shapes = [{'shape': sym.get('shape', 'ellipse'), 'box': tuple(sym['box'])} for syms, _t in targets for sym in syms if 'box' in sym]
+        for sym, tip in [(sym, tip) for syms, tip in targets for sym in syms]:
             if 'wire' in sym:
                 ks, box = [sym['wire']], None
-                center = lab['arrow']['tip']
+                center = tip
             else:
                 ks, box = wires_through(g, sym['box'], sym_color=sym['color']), sym['box']
                 center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)

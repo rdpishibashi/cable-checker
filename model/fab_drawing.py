@@ -119,14 +119,17 @@ def _cell_text(txts, x0, x1, y1, y0):
 
 
 def build_tables(txts, cols):
-    """隣り合い、行の区切りが同じ列を1つの表にまとめ、行ごとに 線番・PIN の値を持たせる。"""
+    """隣り合い、行の区切りが上から同じ列を1つの表にまとめ、行ごとに 線番・PIN の値を持たせる。
+
+    列の行数は違ってもよい（EE3298-545-28A の左の表 CNCM: 線番の列だけ下に1行多い）。表の行は最も長い列の行で、その行が無い列の値は空。
+    以前は行数が同じ列だけをまとめたため、線番と PIN が別の表に分かれ、電線がつながる PIN の行に線番が無かった。"""
     cols = sorted(cols, key=lambda c: (round(c['rows'][0][0], 1), c['x0']))
     tables = []
     for c in cols:
         for t in tables:
             last = t['cols'][-1]
-            if abs(last['x1'] - c['x0']) < TOL and len(last['rows']) == len(c['rows']) and \
-                    all(abs(a[0] - b[0]) < TOL for a, b in zip(last['rows'], c['rows'])):
+            if abs(last['x1'] - c['x0']) < TOL and all(abs(a[0] - b[0]) < TOL and abs(a[1] - b[1]) < TOL
+                                                       for a, b in zip(last['rows'], c['rows'])):
                 t['cols'].append(c)
                 break
         else:
@@ -134,17 +137,20 @@ def build_tables(txts, cols):
     for t in tables:
         t['x0'] = min(c['x0'] for c in t['cols'])
         t['x1'] = max(c['x1'] for c in t['cols'])
-        rows = t['cols'][0]['rows']
+        rows = max((c['rows'] for c in t['cols']), key=len)
         t['y0'], t['y1'] = rows[-1][1], t['cols'][0]['top']
         t['rows'] = []
         for i, (y1, y0) in enumerate(rows):
             r = {'i': i + 1, 'y1': y1, 'y0': y0}
             for c in t['cols']:
-                v, dead = _cell_text(txts, c['x0'], c['x1'], y1, y0)
+                if i >= len(c['rows']):        # この列には無い行（下に行が多い列がある）
+                    v, dead = '', ''
+                else:
+                    v, dead = _cell_text(txts, c['x0'], c['x1'], y1, y0)
                 key = c['kind'] if c['kind'] not in r else c['kind'] + '_2'
                 r[key] = v
                 r.setdefault('_refs', {})[key] = [(norm(x.s), x.ref) for x in txts
-                                                  if c['x0'] < x.cx < c['x1'] and y0 < x.cy < y1 and not x.struck]
+                                                  if i < len(c['rows']) and c['x0'] < x.cx < c['x1'] and y0 < x.cy < y1 and not x.struck]
                 if dead:
                     r.setdefault('_deleted', {})[key] = dead
             t['rows'].append(r)

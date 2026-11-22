@@ -6,17 +6,24 @@ fab_drawing.py）が共用する。実現性検討の試作（docs/feasibility/�
 
 非表示のものは集めない: `invisible` 属性、off／frozen の画層、非表示の INSERT の中身
 （ULVAC の改訂運用は古い文字を消さずに隠す。例: 線番設定表の古い注記 `EE****-503-47`）。
-図面枠（JZB_*）と改訂記号（SX_DeltaSymbol*）の INSERT は中を見ない。
+改訂記号（SX_DeltaSymbol*）の INSERT は中を見ない。ブロック `JZB_*` は、外接矩形の長辺（×尺度）が `FRAME_BLOCK_MIN_SIZE` 以上なら
+図面枠・情報枠として中を見ない。それより小さい `JZB_*` は記載・寸法・小さな記号のブロックで、**中の文字だけ**を読む
+（線・ポリライン・弧は読まない。電線の連結に混ざるため）。
 """
 import unicodedata
 from dataclasses import dataclass, replace
 
 import ezdxf
+from ezdxf import bbox
 
 from .text_utils import underscores_to_spaces
 
 TOL = 0.3
-_SKIP_BLOCKS = ('SX_DeltaSymbol', 'JZB')
+_SKIP_BLOCKS = ('SX_DeltaSymbol',)
+_JZB = 'JZB'
+# 図面枠・情報枠の JZB ブロックの大きさの下限。ケーブル図（393）106枚の JZB の INSERT 1226個は、一辺 175 以上（図面枠・情報枠）と
+# 110 以下（記載・寸法・小さな記号。80枚）にはっきり分かれる（間の 110〜175 は無い）。
+FRAME_BLOCK_MIN_SIZE = 150.0
 
 
 @dataclass
@@ -179,11 +186,27 @@ def collect(msp, hidden=frozenset()):
     def is_hidden(e):
         return bool(e.dxf.get('invisible', 0)) or e.dxf.get('layer', '0') in hidden
 
-    def walk(ents, src, depth):
+    sizes = {}
+
+    def is_frame_block(e):
+        """INSERT が図面枠・情報枠（大きな JZB ブロック）か。外接矩形が取れないブロックは枠として読み飛ばす（従来どおり）。"""
+        name = e.dxf.name
+        if name not in sizes:
+            try:
+                ext = bbox.extents(e.doc.blocks.get(name), fast=True)
+                sizes[name] = max(ext.size.x, ext.size.y) if ext.has_data else 0.0
+            except Exception:
+                sizes[name] = FRAME_BLOCK_MIN_SIZE
+        scale = max(abs(e.dxf.get('xscale', 1.0)), abs(e.dxf.get('yscale', 1.0)))
+        return sizes[name] * scale >= FRAME_BLOCK_MIN_SIZE
+
+    def walk(ents, src, depth, texts_only=False):
         for e in ents:
             if is_hidden(e):
                 continue
             t = e.dxftype()
+            if texts_only and t not in ('TEXT', 'MTEXT', 'ATTRIB', 'INSERT'):
+                continue                   # 小さな JZB ブロックの中は、文字だけを読む
             if t in ('TEXT', 'MTEXT', 'ATTRIB'):
                 s, x0, x1, y0, y1 = _text_box(e)
                 if s.strip():
@@ -208,12 +231,15 @@ def collect(msp, hidden=frozenset()):
                 arcs.append((e.start_point.x, e.start_point.y))
                 arcs.append((e.end_point.x, e.end_point.y))
             elif t == 'INSERT' and e.dxf.name.startswith(_SKIP_BLOCKS):
-                continue   # 改訂記号（△B 等）と図面枠（JZB_）はセルの値でも電線でもない
+                continue   # 改訂記号（△B 等）はセルの値でも電線でもない
+            elif t == 'INSERT' and e.dxf.name.startswith(_JZB) and is_frame_block(e):
+                continue   # 図面枠・情報枠
             elif t == 'INSERT' and depth < 6:
+                only = texts_only or e.dxf.name.startswith(_JZB)
                 for a in e.attribs:
-                    walk([a], e.dxf.name, depth + 1)
+                    walk([a], e.dxf.name, depth + 1, only)
                 try:
-                    walk(list(e.virtual_entities()), e.dxf.name, depth + 1)
+                    walk(list(e.virtual_entities()), e.dxf.name, depth + 1, only)
                 except Exception:
                     pass
     walk(msp, 'msp', 0)

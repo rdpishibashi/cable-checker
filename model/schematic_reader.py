@@ -729,6 +729,11 @@ def narrow_rects(g, min_size=2.0, short_max=NARROW_MAX, long_max=NARROW_LONG_MAX
     return out
 
 
+# 芯線をたどるとき、次の線分に認める最小の長さ。芯線の途中の小さな段差（縦の線分。EE6888-637-01A の M39065 は高さ 1.0）を越えるため、
+# 実データで結果が変わらない範囲（0.0〜0.9 で M39065 の1件だけ）のうち、余裕をとって 0.5 にする
+MIN_CHAIN_LENGTH = 0.5
+
+
 def trace_wire(g, grid, k, start_pt=None, max_steps=60):
     """芯線 k を両方向に端点でつながる線分でたどり、両端点と経路を返す。分岐点で止める。
 
@@ -753,7 +758,7 @@ def trace_wire(g, grid, k, start_pt=None, max_steps=60):
                 elif math.dist(t.b, cur) < 0.08:
                     nxt.append((j, t.a))
             # 同じ色の線を優先（コネクタの矢じりなど別の色の短い線に入らない）
-            same = [(j, q) for j, q in nxt if g.segs[j].color == s.color and g.segs[j].length > 1.2]
+            same = [(j, q) for j, q in nxt if g.segs[j].color == s.color and g.segs[j].length > MIN_CHAIN_LENGTH]
             if len(same) == 1:
                 j, cur = same[0]
                 path.append(j)

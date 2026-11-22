@@ -61,7 +61,7 @@ EXPECTED_DISTRIBUTION = {
     'ケーブル｜サイズ': (37, 0, 2, 0, 189),
     'ケーブル｜芯数': (54, 8, 40, 0, 126),
     '芯線｜線番': (50, 0, 6, 0, 172),
-    '芯線｜PIN': (57, 1, 24, 2, 144),
+    '芯線｜PIN': (58, 1, 23, 2, 144),
     '芯線｜色': (1, 0, 2, 0, 225),
 }
 
@@ -513,4 +513,14 @@ def test_cable_size_is_compared_with_the_awg_written_in_the_fab_drawing(result):
     # viewer: M39006 は サイズ 24 で、図面に `ULシールド線 AWG24-40C`（○）と `UL AWG22 GNYE`（強調しない）がある
     marks = [(m['text'], m['symbol']) for m in row_of(result, 'M39006', 'EE6892-339-51C', 6)['marks'] if m['item'] == 'ケーブル｜サイズ']
     assert ('24', '○') in marks and ('ULシールド線 AWG24-40C', '○') in marks and not any('GNYE' in t for t, _ in marks)
+
+
+def test_wire_with_a_short_jog_is_read_to_both_connectors_m39065(result):
+    """守るもの（ユーザー報告 2026-11-22。EE6888-637-01A の M39065）: 製作図の `5`–`A2` の芯線は、途中に高さ 1.0 の段差（縦の線分）があるが、
+    展開接続図でも両端（CNPGIG01S の 5 と CNPG01 の A2）まで読めて PIN が ○。以前は段差の手前で追跡が止まり、`A2` 側の端末が無く × だった
+    （芯線｜PIN は ○57・×24 から ○58・×23 になった。変わったのはこの1行だけ）。"""
+    row = row_of(result, 'M39065')
+    assert row['cells']['芯線｜PIN'] == '○'
+    wire = next(w for w in result['wires'] if w['ケーブル番号'] == 'M39065' and w['製作図の端1 PIN'] == '5')
+    assert (wire['展開接続図の端- PIN'], wire['展開接続図の端+ PIN'], wire['判定（PIN）']) == ('A2', '5', '○')
 

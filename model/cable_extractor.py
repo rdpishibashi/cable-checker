@@ -97,8 +97,8 @@ def dedupe_by_name(names):
     return keep, skipped
 
 
-def extract_cables(dxf_path, original_filename):
-    """1つの DXF からケーブル情報を抽出する。
+def extract_cables(dxf_path, original_filename, doc=None):
+    """1つの DXF からケーブル情報を抽出する。`doc`（解析済みの文書）が渡されたら `dxf_path` を読み直さない（読み取りのみ）。
 
     Returns:
         {'drawing_number': 図番（拡張子なしのファイル名）, 'title', 'subtitle',
@@ -113,6 +113,7 @@ def extract_cables(dxf_path, original_filename):
         extract_drawing_numbers_option=True,
         extract_title_option=True,
         original_filename=original_filename,
+        doc=doc,
     )
     # 共有の extract_labels() は読み込み失敗を例外にせず info['error'] に入れて空で返す。
     # そのままだと「読めなかった図面」が「ケーブル0件の図面」に見えるので、ここで例外にする。

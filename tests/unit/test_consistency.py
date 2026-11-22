@@ -932,7 +932,7 @@ def test_patterns_are_resolved_inside_their_own_set_of_drawings():
     assert (fab['件数'], fab['当たった図面']) == (1, FAB_NAME)
 
 
-def fake_extract(path, name):
+def fake_extract(path, name, doc=None):
     return {'drawing_number': os.path.splitext(name)[0], 'title': '', 'subtitle': '', 'cables': []}
 
 
@@ -941,7 +941,7 @@ def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last
     進捗の段階は 393 → 405（読む図面は「展開接続図の読み取り」、ほかは「抽出」。1つのファイルで続けて行う）。"""
     calls = []
 
-    def fake_analyze(path, name):
+    def fake_analyze(path, name, doc=None):
         calls.append(('393', name))
         d = drawing(name, kinds=[])
         if name == LIST_NAME:
@@ -949,7 +949,7 @@ def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last
             d['list_rows'] = [list_row(接続図パターン='EE****-610-**')]
         return d
 
-    def fake_schematic(path, name, title=None):
+    def fake_schematic(path, name, title=None, doc=None):
         calls.append(('405', name, title))
         return {'title': 't', 'error': '', 'no_text': False, 'region_error': '', 'occurrences': []}
 
@@ -976,17 +976,17 @@ def test_analyze_uploads_reads_each_set_its_own_way_and_the_schematics_in_a_last
 def test_analyze_uploads_keeps_going_when_a_file_or_a_schematic_fails(monkeypatch):
     """守るもの: 壊れた1件（抽出か読み取りのどちらかが失敗）は図面にも抽出結果にも入らずエラーになり、残りは続く。
     展開接続図の読み取りだけが失敗した 405 は、抽出結果と図面には残り、エラーになる。"""
-    def analyze(path, name):
+    def analyze(path, name, doc=None):
         if name == 'EE0001-393-01A':
             raise ValueError('broken 393')
         return drawing(name, list_rows=[list_row(接続図パターン='EE****-610-**')] if name == LIST_NAME else [])
 
-    def extract(path, name):
+    def extract(path, name, doc=None):
         if name.startswith('EE0002-405-01A'):
             raise ValueError('broken 405')
         return fake_extract(path, name)
 
-    def boom(path, name, title=None):
+    def boom(path, name, title=None, doc=None):
         raise RuntimeError('broken schematic')
 
     monkeypatch.setattr(C, 'analyze_drawing', analyze)
@@ -1003,10 +1003,10 @@ def test_analyze_uploads_keeps_going_when_a_file_or_a_schematic_fails(monkeypatc
 
 def test_schematic_without_text_marks_the_drawing_as_having_no_text(monkeypatch):
     """守るもの: 展開接続図として読んだ結果が「文字が無い」なら、図面の no_text が立つ（画面の警告・Summary の「文字の無い図面」に出る）。"""
-    monkeypatch.setattr(C, 'analyze_drawing', lambda path, name: drawing(
+    monkeypatch.setattr(C, 'analyze_drawing', lambda path, name, doc=None: drawing(
         name, list_rows=[list_row(接続図パターン='EE****-610-**')]))
     monkeypatch.setattr(C, 'extract_cables', fake_extract)
-    monkeypatch.setattr(C, 'analyze_schematic', lambda path, name, title=None: {
+    monkeypatch.setattr(C, 'analyze_schematic', lambda path, name, title=None, doc=None: {
         'title': '', 'error': '', 'no_text': True, 'region_error': '', 'occurrences': [], 'refs': []})
     drawings, _extracts, errors = C.analyze_uploads([(f'{SCH_NAME}.dxf', b'x')], [(f'{LIST_NAME}.dxf', b'x')])
     assert errors == [] and by_name(drawings, SCH_NAME)['no_text'] and not by_name(drawings, LIST_NAME)['no_text']
@@ -1014,8 +1014,8 @@ def test_schematic_without_text_marks_the_drawing_as_having_no_text(monkeypatch)
 
 def test_run_check_adds_extracts_and_the_cable_comparison_to_the_result(monkeypatch):
     """守るもの: run_check は照合の結果に、抽出結果（セットごと）とケーブル番号の比較（全体）を足す。405 だけでも動く。"""
-    monkeypatch.setattr(C, 'analyze_drawing', lambda path, name: drawing(name))
-    monkeypatch.setattr(C, 'extract_cables', lambda path, name: {
+    monkeypatch.setattr(C, 'analyze_drawing', lambda path, name, doc=None: drawing(name))
+    monkeypatch.setattr(C, 'extract_cables', lambda path, name, doc=None: {
         'drawing_number': os.path.splitext(name)[0], 'title': 'T', 'subtitle': '',
         'cables': [{'cable': 'M39001', 'remark': ''}]})
     result, errors = C.run_check([(f'{SCH_NAME}.dxf', b'x')], [('EE0001-393-01A.dxf', b'x')])

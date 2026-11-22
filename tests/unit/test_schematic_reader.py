@@ -690,3 +690,17 @@ def test_horizontal_pipe_is_continued_by_a_star_mark_too(tmp_path):
     doc.saveas(path)
     occ = occurrence(read(str(path)))
     assert occ['how'] == 'capsule' and len(occ['_symbols']) == 2
+
+
+@pytest.mark.parametrize('jog', [1.0, 0.6])
+def test_wire_with_a_short_vertical_jog_is_followed_to_the_connector(tmp_path, jog):
+    """守るもの（実図面 EE6888-637-01A の M39065。A2–5 の芯線）: 芯線の途中に高さ 1.0 の小さな段差（縦の線分）があっても、芯線は段差を越えて
+    コネクタまで追跡する。以前は、次の線分を「長さ 1.2 より長いもの」に限っていたため、段差の手前で止まり、`-` 側の端末が読めなかった。"""
+    def extras(msp):
+        for e in list(msp.query('LINE')):
+            if (round(e.dxf.start.x), round(e.dxf.start.y)) == (9, 8) and round(e.dxf.end.x) == 50:
+                msp.delete_entity(e)
+        msp.add_lwpolyline([(9, 8), (20, 8), (20, 8 + jog), (50, 8 + jog)], dxfattribs={'color': 4})
+    wires = occurrence(read(build(tmp_path, extras=extras)))['wires']
+    pins = sorted((w['ends']['-']['pin'], w['ends']['+']['pin']) for w in wires if w['ends'].get('-') and w['ends']['-']['kind'])
+    assert pins == [('1', '1'), ('2', '2')], pins

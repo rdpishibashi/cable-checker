@@ -60,7 +60,7 @@ EXPECTED_DISTRIBUTION = {
     'ケーブル｜種類': (28, 0, 101, 0, 99),
     'ケーブル｜芯数': (54, 8, 40, 0, 126),
     '芯線｜線番': (50, 0, 6, 0, 172),
-    '芯線｜PIN': (57, 1, 24, 2, 144),
+    '芯線｜PIN': (58, 1, 23, 2, 144),
     '芯線｜色': (1, 0, 2, 0, 225),
 }
 
@@ -493,3 +493,14 @@ def test_m65232_two_sections_are_fully_matched_in_the_viewer_data(result):
     assert row2['cells']['ケーブル｜種類'] == '○' and '製作図 ○' in basis(result, row2, 'ケーブル｜種類')
     fab_marks = {(m['text'], m['symbol']) for m in secs[('ケーブル製作図', 'EE3298-556-51A')]['marks'] if m['symbol'] != '関連'}
     assert {('*1', '○'), ('SH', '○'), ('A', '○')} <= fab_marks
+
+
+def test_wire_with_a_short_jog_is_read_to_both_connectors_m39065(result):
+    """守るもの（ユーザー報告 2026-11-22。EE6888-637-01A の M39065）: 製作図の `5`–`A2` の芯線は、途中に高さ 1.0 の段差（縦の線分）があるが、
+    展開接続図でも両端（CNPGIG01S の 5 と CNPG01 の A2）まで読めて PIN が ○。以前は段差の手前で追跡が止まり、`A2` 側の端末が無く × だった
+    （芯線｜PIN は ○57・×24 から ○58・×23 になった。変わったのはこの1行だけ）。"""
+    row = row_of(result, 'M39065')
+    assert row['cells']['芯線｜PIN'] == '○'
+    wire = next(w for w in result['wires'] if w['ケーブル番号'] == 'M39065' and w['製作図の端1 PIN'] == '5')
+    assert (wire['展開接続図の端- PIN'], wire['展開接続図の端+ PIN'], wire['判定（PIN）']) == ('A2', '5', '○')
+

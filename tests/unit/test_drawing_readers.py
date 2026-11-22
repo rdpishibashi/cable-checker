@@ -61,9 +61,14 @@ def test_hidden_entities_are_not_collected(tmp_path):
 
 
 def test_frame_and_revision_inserts_are_skipped(tmp_path):
+    """守るもの: 図面枠（大きな JZB ブロック）と改訂記号（SX_DeltaSymbol）の中の文字は読まない。図面枠は一辺 150 以上（実データの枠は 175 以上）。
+    小さな JZB ブロック（記載）の文字は読む（`test_small_jzb_block_text_is_read_but_a_large_one_is_a_drawing_frame`）。"""
     doc, msp = new_doc()
     for name in ('JZB_A3', 'SX_DeltaSymbolB', 'OTHER'):
-        doc.blocks.new(name).add_text(name, dxfattribs={'insert': (0, 0), 'height': 3})
+        block = doc.blocks.new(name)
+        block.add_text(name, dxfattribs={'insert': (0, 0), 'height': 3})
+        if name == 'JZB_A3':
+            block.add_lwpolyline([(0, 0), (420, 0), (420, 297), (0, 297)], close=True)   # A3 の図面枠
         msp.add_blockref(name, (0, 0))
     assert [t.s for t in load(doc, tmp_path).txts] == ['OTHER']
 

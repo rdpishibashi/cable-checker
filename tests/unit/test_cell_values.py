@@ -68,3 +68,11 @@ def test_awg_sizes_reads_the_number_next_to_awg(text, expected):
 def test_size_key_drops_a_leading_awg_and_spaces():
     assert cv.size_key('AWG 16') == '16' and cv.size_key(' 24 ') == '24' and cv.size_key('') == ''
 
+
+def test_device_code_wildcard_is_one_character_per_star_so_a_wire_number_star_does_not_match():
+    """守るもの: 機器符号の `*` は1つで1文字（文字数を問わない形にしない）。製作図の `*2`（線番の記号）・`***`（伏せ字）が、一覧表の `CN2`・`RS-232C` に
+    一致してはいけない（文字数を問わない形にして全データで測ると、6セルが誤って一致した。M39004・M39005・M65260・M65A06）。モジュールの `*`
+    （consistency の展開接続図のモジュールの照合）は別の規則で、数を問わない。"""
+    assert not cv.code_matches_name('CN2', '*2') and not cv.code_matches_name('RS-232C', '***')
+    assert cv.code_matches_name('CNSHPR1', 'CNSHP**') and not cv.code_matches_name('CNSHPR1', 'CNSHP*')
+

@@ -633,6 +633,38 @@ def test_module_wildcard_or_empty_is_na():
     assert sym(ds, 'm1') == NA
 
 
+@pytest.mark.parametrize('unit_text', ['ALS1 **', 'ALS1 *', 'ALS1 ***', 'ALS1**', 'ALS1 ** (GEXUS)'])
+def test_module_is_matched_by_the_wildcard_in_the_unit_text_whatever_the_number_of_stars(unit_text):
+    """守るもの（ユーザー決定 2026-11-22。実図面 EE6888-639-01A の `TMP CONTR **`）: 図面のユニット名の `*` はモジュールの伏せ字で、文字数はモジュールと
+    一致しないことがある（`**` が `R1`、`F`、`R10` のどれにも当たる）。`*` が1つ以上あれば、数を問わずモジュールは ○。以前は `？`（記載が見つからない）。"""
+    wires = [wire(end('box', 'TBR1B', '1', regions=[unit_text]), end('box', 'CN1', 'A'))]
+    for module in ('R1', 'R10', 'F2'):
+        row = {'端末1_ユニット': 'ALS1', '端末1_モジュール': module}
+        s, basis = cell(with_schematic(build(), wires=wires, row=row), 'm1')
+        assert s == OK and 'ワイルドカード' in basis, (unit_text, module)
+
+
+def test_module_without_wildcard_or_other_module_is_not_matched_by_the_wildcard_rule():
+    """守るもの: ワイルドカードで ○ になるのは、ユニットの文字に `*` があるときだけ。`*` が無く記載も無ければ ？、別のモジュール（`R2`）があれば ×。"""
+    row = {'端末1_ユニット': 'ALS1', '端末1_モジュール': 'R1'}
+    for text, expected in (('ALS1', UNREAD), ('ALS1 R2', NG)):
+        wires = [wire(end('box', 'TBR1B', '1', regions=[text]), end('box', 'CN1', 'A'))]
+        assert sym(with_schematic(build(), wires=wires, row=row), 'm1') == expected, text
+
+
+def test_unit_text_is_marked_with_the_unit_symbol_only_not_mixed_with_the_module_symbol():
+    """守るもの（ユーザー決定 2026-11-22。実図面 EE6888-639-01A の M65124 の `TMP`）: viewer の展開接続図のユニットの文字は、ユニットの判定の記号だけで塗る。
+    モジュールが ？・× でも、ユニットが ○ なら文字は ○（以前は重いほうの記号になり、`TMP` が青になった）。モジュールの記号は一覧表のモジュールのセルに残る。"""
+    unit_end = end('box', 'TBR1B', '1', regions=['ALS1'])
+    unit_end['_refs'] = {'regions': {'ALS1': (1.0, 2.0)}}
+    wires = [wire(unit_end, end('box', 'CN1', 'A'))]
+    ds = with_schematic(build(), wires=wires, row={'端末1_ユニット': 'ALS1', '端末1_モジュール': 'R1'})
+    res, row = run(ds)
+    assert (row['cells'][COL['u1']], row['cells'][COL['m1']]) == (OK, UNREAD)
+    marks = [(m['text'], m['symbol']) for m in row['marks'] if m['item'] == '端末1｜ユニット' and m['drawing'] == SCH_NAME]
+    assert marks == [('ALS1', OK)]
+
+
 # ---------------------------------------------------------------- 展開接続図: 芯数・種類
 
 def test_core_count_exact_weak_excluding_drain_and_ng():

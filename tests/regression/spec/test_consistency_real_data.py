@@ -49,16 +49,16 @@ EXPECTED_DISTRIBUTION = {
     '図面の対応｜製作図': (133, 0, 1, 0, 94),
     '図面の対応｜線番設定表': (38, 0, 2, 0, 188),
     '図面の対応｜展開接続図': (119, 0, 15, 0, 94),
-    '端末1｜ユニット': (42, 37, 16, 22, 111),
-    '端末1｜モジュール': (3, 0, 0, 13, 212),
-    '端末1｜機器符号': (100, 0, 12, 17, 99),
-    '端末1｜部品種別': (15, 0, 118, 0, 95),
-    '端末2｜ユニット': (51, 23, 7, 22, 125),
-    '端末2｜モジュール': (6, 0, 0, 12, 210),
+    '端末1｜ユニット': (43, 37, 16, 21, 111),
+    '端末1｜モジュール': (5, 0, 0, 11, 212),
+    '端末1｜機器符号': (101, 0, 11, 17, 99),
+    '端末1｜部品種別': (33, 0, 100, 0, 95),
+    '端末2｜ユニット': (52, 23, 7, 21, 125),
+    '端末2｜モジュール': (7, 0, 0, 11, 210),
     '端末2｜機器符号': (85, 0, 10, 18, 115),
-    '端末2｜部品種別': (17, 0, 104, 0, 107),
-    'ケーブル｜種類': (28, 0, 101, 0, 99),
-    'ケーブル｜サイズ': (37, 0, 2, 0, 189),
+    '端末2｜部品種別': (36, 0, 85, 0, 107),
+    'ケーブル｜種類': (35, 0, 94, 0, 99),
+    'ケーブル｜サイズ': (69, 0, 1, 0, 158),
     'ケーブル｜芯数': (54, 8, 40, 0, 126),
     '芯線｜線番': (50, 0, 6, 0, 172),
     '芯線｜PIN': (58, 1, 23, 2, 144),
@@ -181,7 +181,7 @@ def test_schematics_are_read_only_when_a_list_row_points_at_them(uploaded):
     assert len(read) == 18 and all(d.startswith(('EE6', 'EE7')) for d in read)
     assert not any(n.startswith('EE3298') for n in read)
     occ = [o for d in uploaded if d['schematic'] for o in d['schematic']['occurrences']]
-    assert len(occ) == 126 and sum(len(o['wires']) for o in occ) == 657
+    assert len(occ) == 126 and sum(len(o['wires']) for o in occ) == 658
     assert {h: sum(o['how'] == h for o in occ) for h in ('ellipse', 'capsule', 'via-line', 'single', 'beside', 'none')} == {
         'ellipse': 42, 'capsule': 13, 'via-line': 25, 'single': 32, 'beside': 14, 'none': 0}
     assert all('展開接続図' in d['kinds'] for d in uploaded if d['schematic'] is not None)
@@ -192,7 +192,7 @@ def test_check_distribution_per_item(result):
     assert len(rows) == 228 and sum(bool(r['一覧表の図番']) for r in rows) == 134
     counts = {c: tuple(sum(r['cells'][c] == s for r in rows) for s in SYMBOLS) for c in ITEM_COLUMNS}
     assert counts == EXPECTED_DISTRIBUTION
-    assert sum(r['不整合数'] > 0 for r in rows) == 228 and sum(r['要確認数'] > 0 for r in rows) == 30
+    assert sum(r['不整合数'] > 0 for r in rows) == 228 and sum(r['要確認数'] > 0 for r in rows) == 29
     assert len(result['details']) == 4372 and len(result['wires']) == 791
     assert result['unused'] == ['EE5207-405A', 'EE5283-300-30D', 'EE5283-393-01B', 'EE6886-699-01A', 'EE6888-660-01A',
                                 'EE6892-405-17A', 'EE6892-514-01B']
@@ -274,8 +274,8 @@ def test_excel_matches_preview_and_has_all_rows(result):
     # シートの並びと行数。ケーブル記載図面＝ケーブル 217（両方108・展開接続図だけ2・393 だけ107）、図面一覧＝129図面、ケーブル抽出＝405 の110＋393 の267
     assert {k: len(v) for k, v in sheets.items()} == {
         'Summary': 32, '記号の説明': LEGEND_ROWS, '図面一覧': 129, '図面の関係': 23, 'ケーブル抽出': 377, 'ケーブル記載図面': 217,
-        '整合性チェック': 228, '照合明細': 4372, '芯線照合': 791, '展開接続図': 657, 'ケーブル一覧表': 134, '線番設定表': 403,
-        '製作図の接続表': 457, '製作図の文字': 3852, '図番パターン照合': 174}
+        '整合性チェック': 228, '照合明細': 4372, '芯線照合': 791, '展開接続図': 658, 'ケーブル一覧表': 134, '線番設定表': 403,
+        '製作図の接続表': 457, '製作図の文字': 4672, '図番パターン照合': 174}
     assert list(sheets) == ['Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'ケーブル記載図面', '整合性チェック', '照合明細',
                             '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']
     index = sheets['図面一覧']
@@ -498,9 +498,8 @@ def test_m65232_two_sections_are_fully_matched_in_the_viewer_data(result):
 
 def test_cable_size_is_compared_with_the_awg_written_in_the_fab_drawing(result):
     """守るもの（ユーザー依頼 2026-11-22）: 一覧表のサイズは製作図の AWG の数字（`AWG16`・`18AWG-15C`）と比べる。
-    ○37（AWG が1つだけ合う30、ケーブル本体とアース線の AWG が並ぶ6、数字が前の `UL444 type CM 18AWG-15C` の M06020）・
-    ×2（M39021 は サイズ 26 で図面は `AWG20(GNYE)` だけ、M65232 の1行目は サイズ 10 で図面は `UL AWG20 GNYE` だけ）。
-    製作図に AWG が無い63行・サイズが空の32行は比べない（－）。ほかの項目の判定は変えない。"""
+    ○69・×1（M39021 は サイズ 26 で図面は `AWG20(GNYE)` だけ）。M65232 の1行目（サイズ 10）は、製作図の小さな JZB ブロックの中の
+    `ULシールド線 AWG10-4C` を読めるようになって ○（以前は GNYE の AWG20 だけが見えて ×）。製作図に AWG が無い行・サイズが空の行は比べない（－）。"""
     row = row_of(result, 'M06020', 'EE6888-306-51D', 8)
     assert row['cells']['ケーブル｜サイズ'] == '○' and '製作図 ○' in basis(result, row, 'ケーブル｜サイズ')
     for cable, lst, line in (('M06004', 'EE6888-306-51D', 1), ('M39006', 'EE6892-339-51C', 6), ('M39012', 'EE6892-339-51C', 23),
@@ -509,7 +508,7 @@ def test_cable_size_is_compared_with_the_awg_written_in_the_fab_drawing(result):
     row = row_of(result, 'M39021', 'EE6892-339-52B', 5)
     assert row['cells']['ケーブル｜サイズ'] == '×' and '図面は AWG20' in basis(result, row, 'ケーブル｜サイズ')
     row = row_of(result, 'M65232', 'EE6892-365-62G', 1)
-    assert row['cells']['ケーブル｜サイズ'] == '×' and row_of(result, 'M65232', 'EE6892-365-62G', 2)['cells']['ケーブル｜サイズ'] == '－'
+    assert row['cells']['ケーブル｜サイズ'] == '○' and row_of(result, 'M65232', 'EE6892-365-62G', 2)['cells']['ケーブル｜サイズ'] == '－'
     # viewer: M39006 は サイズ 24 で、図面に `ULシールド線 AWG24-40C`（○）と `UL AWG22 GNYE`（強調しない）がある
     marks = [(m['text'], m['symbol']) for m in row_of(result, 'M39006', 'EE6892-339-51C', 6)['marks'] if m['item'] == 'ケーブル｜サイズ']
     assert ('24', '○') in marks and ('ULシールド線 AWG24-40C', '○') in marks and not any('GNYE' in t for t, _ in marks)
@@ -523,4 +522,24 @@ def test_wire_with_a_short_jog_is_read_to_both_connectors_m39065(result):
     assert row['cells']['芯線｜PIN'] == '○'
     wire = next(w for w in result['wires'] if w['ケーブル番号'] == 'M39065' and w['製作図の端1 PIN'] == '5')
     assert (wire['展開接続図の端- PIN'], wire['展開接続図の端+ PIN'], wire['判定（PIN）']) == ('A2', '5', '○')
+
+
+def test_m65123_and_m65124_are_read_from_jzb_blocks_wildcards_second_arrows_and_gapped_frames(result):
+    """守るもの（ユーザー報告 2026-11-22。EE6888-639-01A の M65123・M65124）:
+    ① 製作図 EE3298-553-12D の `ACCESSORY CABLE`・`付属コネクタ` は小さな `JZB_0003`・`JZB_0004` ブロックの中にある。読めて、一覧表の端末2 の部品種別・ケーブル種類が ○
+       （以前は JZB をすべて図面枠として読み飛ばし、どちらも ×）。
+    ② 展開接続図の `TMP CONTR **\n(EI-R04M)`（2行）は、領域の名称候補 `TMP CONTR ** (EI-R04M)` の位置が取れて強調され、一覧表のモジュール R1 は `**` のワイルドカードで ○。
+    ③ M65124 のラベルの引出線は、1つ目の矢印を通り越して2つ目の矢印まで続く。2本の線（`MOTOR`・`MAG BRG`）が読めて、端末1 の機器符号が ○。
+    ④ `TMP` の枠（辺が2つのコネクタ枠で途切れる）は、名称候補 `TMP` で領域になり、端末2 のユニットが ○。viewer の `TMP` はユニットの記号（○）で塗る。"""
+    row = row_of(result, 'M65123')
+    assert (row['cells']['端末2｜部品種別'], row['cells']['ケーブル｜種類'], row['cells']['端末2｜モジュール']) == ('○', '○', '○')
+    marks = {(m['drawing'], m['text'], m['symbol']) for m in row['marks']}
+    assert {('EE3298-553-12D', '付属コネクタ', '○'), ('EE3298-553-12D', 'ACCESSORY CABLE', '○'),
+            ('EE6888-639-01A', 'TMP CONTR ** (EI-R04M)', '○')} <= marks
+    row = row_of(result, 'M65124')
+    assert (row['cells']['端末1｜機器符号'], row['cells']['端末1｜ユニット'], row['cells']['端末1｜モジュール']) == ('○', '○', '○')
+    assert row['cells']['端末2｜ユニット'] == '○' and '領域（TMP）' in basis(result, row, '端末2｜ユニット')
+    marks = {(m['drawing'], m['text'], m['symbol']) for m in row['marks']}
+    assert {('EE6888-639-01A', 'MOTOR', '○'), ('EE6888-639-01A', 'MAG BRG', '○'), ('EE6888-639-01A', 'TMP', '○')} <= marks
+    assert sum(s['item'] == '芯線' for s in row['shapes']) == 2                        # 2本の芯線（図形）
 

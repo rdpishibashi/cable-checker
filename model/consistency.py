@@ -690,6 +690,9 @@ def _terminal_cells(ctx, row, i, sel, mine, pick, fabs=(), fab_ok=False):
                     if any(m in _nfkc_squash(t) for t in decided) or (decided and m in _nfkc_squash(title)):
                         mod_cell.add('展開接続図', OK, '一致（ユニットの文字）' if any(m in _nfkc_squash(t) for t in decided)
                                      else '一致（図面タイトル）')
+                    elif any('*' in t for t in decided):
+                        # 図面のユニット名の `*`（`TMP CONTR **`）はモジュールの伏せ字。文字数はモジュールと一致しないことがあるので、数は問わない
+                        mod_cell.add('展開接続図', OK, '一致（ユニットの文字のワイルドカード）')
                     elif decided:
                         others = set().union(*(_module_tokens(t) for t in decided))
                         if others:

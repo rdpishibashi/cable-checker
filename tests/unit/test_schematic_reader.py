@@ -704,3 +704,84 @@ def test_wire_with_a_short_vertical_jog_is_followed_to_the_connector(tmp_path, j
     wires = occurrence(read(build(tmp_path, extras=extras)))['wires']
     pins = sorted((w['ends']['-']['pin'], w['ends']['+']['pin']) for w in wires if w['ends'].get('-') and w['ends']['-']['kind'])
     assert pins == [('1', '1'), ('2', '2')], pins
+
+
+# ---------------------------------------------------------------- 同じ引出線の別の矢印（M65124）
+
+def build_siblings(tmp_path, second_label=False, name='EE0000-405-01A'):
+    """左に2つのコネクタ（MOTOR・MAG BRG）、右へ2本の横線（y=8・y=-8）。ケーブル番号 M65206 の引出線は、1つ目の矢印（先端 (30,8)）を通り越して
+    下へ続き、2つ目の矢印（先端 (30,-8)）で終わる。`second_label=True` のときは2つ目の矢印に別の引出線と別のケーブル番号 M65207 が付く。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    for y, pin, label in ((8, '1', 'MOTOR'), (-8, '2', 'MAG BRG')):
+        _box(msp, 0, y - 2, 9, y + 2)
+        _text(msp, pin, 4.5, y)
+        _text(msp, label, 4.5, y + 4.5)
+        _line(msp, (9, y), (50, y))
+    _arrow(msp, (30, 8), 19.5)
+    _text(msp, f'W No.{CABLE}', 22, 19.5, ap=7)
+    if second_label:
+        _arrow(msp, (30, -8), -1.5)
+        _text(msp, 'W No.M65207', 22, -1.5, ap=7)
+    else:
+        _line(msp, (30, -8), (30, 8), 7)
+        _line(msp, (30, -8), (29.5, -5.1), 7)
+        _line(msp, (30, -8), (30.5, -5.1), 7)
+    path = tmp_path / f'{name}.dxf'
+    doc.saveas(path)
+    return str(path)
+
+
+def test_second_arrow_on_the_same_leader_adds_its_wire_to_the_same_cable(tmp_path):
+    """守るもの（実図面 EE6888-639-01A の M65124）: ケーブル番号の引出線が、1つ目の矢印を通り越して2つ目の矢印まで続くとき、2つ目の矢印の先の線も
+    同じケーブルの芯線にする（以前はラベルに最も近い矢印1つだけだったため、2本目の線のコネクタ `MAG BRG` が読めなかった）。引出線の図形にも2つ目の矢印が入る。"""
+    result = read(build_siblings(tmp_path))
+    occ = occurrence(result)
+    assert (occ['cable'], occ['how']) == (CABLE, 'single')
+    assert sorted(w['ends']['-']['name'] for w in occ['wires']) == ['MAG BRG', 'MOTOR']
+    assert any((30.0, -8.0) in (tuple(p), tuple(q)) or any(abs(c - d) < 0.01 for c, d in zip(p, (30, -8))) for p, q in occ['_leader'])
+
+
+def test_arrow_with_its_own_label_is_not_added_to_the_other_cable(tmp_path):
+    """守るもの: 別のケーブル番号と別の引出線を持つ矢印は、同じケーブルの芯線にしない（引出線を共有する矢印だけを加える）。"""
+    result = read(build_siblings(tmp_path, second_label=True))
+    names = {o['cable']: sorted(w['ends']['-']['name'] for w in o['wires']) for o in result['occurrences']}
+    assert names == {CABLE: ['MOTOR'], 'M65207': ['MAG BRG']}
+
+
+# ---------------------------------------------------------------- ユニット名（領域の名称候補）の位置
+
+def test_two_line_unit_text_is_found_for_a_region_name_candidate_written_with_a_space(tmp_path, monkeypatch):
+    """守るもの（実図面 EE6888-639-01A の `TMP CONTR **\\n(EI-R04M)`）: 領域の名称候補は改行を空白にした全文（`TMP CONTR ** (EI-R04M)`）のことがある。
+    図面の文字は2行の MTEXT なので、空白にそろえて突き合わせて文字の位置（viewer の強調に使う）を取る。以前は一致せず、位置が空だった。"""
+    region = {'polygon': [(-20, -5), (20, -5), (20, 20), (-20, 20)], 'area': 1000.0, 'name_candidates': [(1.0, 'UNIT A ** (X)')]}
+    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg, doc=None: {'regions': [region], 'minor_regions': []})
+
+    def extras(msp):
+        _text(msp, 'UNIT A **\\P(X)', -10, 5)
+    end = by_label(occurrence(read(build(tmp_path, extras=extras))))['P021']['ends']['-']
+    assert end['regions'] == ['UNIT A ** (X)']
+    assert end['_refs']['regions']['UNIT A ** (X)'] is not None
+
+
+# ---------------------------------------------------------------- 辺が途切れた枠の名称候補
+
+def _gapped_frame_doc(word):
+    """ユニットの枠 (320,230)–(370,260) の左の辺が2つのコネクタ枠で途切れ、枠の中に文字 word がある図面（EE6888-639-01A の `TMP` の枠）。"""
+    doc = ezdxf.new('R2010', setup=True)
+    msp = doc.modelspace()
+    for a, b in (((320, 260), (370, 260)), ((320, 230), (370, 230)), ((370, 230), (370, 260)),
+                 ((320, 230), (320, 238)), ((320, 242), (320, 253)), ((320, 257), (320, 260))):
+        _line(msp, a, b, 7)
+    _box(msp, 315, 253, 325, 257)
+    _box(msp, 315, 238, 325, 242)
+    _text(msp, word, 345, 235)
+    return doc
+
+
+@pytest.mark.parametrize('word, expected', [('TMP', ['TMP']), ('UNIT A', ['UNIT A']), ('R10', [])])
+def test_gapped_frame_takes_a_designator_like_word_as_its_name(word, expected):
+    """守るもの: 辺が途切れた枠の名称候補には、領域名候補のほか機器符号候補の語（`TMP` のような英字だけの短い名称）も使う。以前は領域名候補だけで、
+    `TMP` の枠は名称が無いため領域にならず、端末2 のユニットが読めなかった。どちらにも分類されない文字（`R10`。その他）は候補にしない。"""
+    regions = sr.gapped_frame_regions(sr.collect(_gapped_frame_doc(word)))
+    assert [[c for _d, c in r['name_candidates']] for r in regions] == ([expected] if expected else [])

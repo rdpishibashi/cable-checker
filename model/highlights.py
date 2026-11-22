@@ -116,8 +116,7 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
                 e_refs = e.get('_refs', {})
                 if e['name'] and e_refs.get('name') is not None:
                     out += _marks_of(dn, [(e['name'], e_refs['name'])], code_sym, f'端末{i}｜機器符号')
-            # ユニットを決めた文字（照合のときに記録したもの。ここで判定し直さない）
-            module_sym = _cmp(cells, col(f'端末{i}', 'モジュール'), '展開接続図')
+            # ユニットを決めた文字（照合のときに記録したもの。ここで判定し直さない）。色はユニットの判定だけ（モジュールの ？・× は一覧表のモジュールのセルに残す）
             for sym, text in cells[col(f'端末{i}', 'ユニット')][0].decided:
                 first = text.split('\n')[0]
                 for w in occ['wires']:
@@ -127,7 +126,7 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
                     e_refs = e.get('_refs', {})
                     ref = e_refs.get('regions', {}).get(text) or e_refs.get('devices', {}).get(text) or e_refs.get('nearby', {}).get(first)
                     if ref is not None:
-                        out += _marks_of(dn, [(text, ref)], _combine(sym, module_sym), f'端末{i}｜ユニット')
+                        out += _marks_of(dn, [(text, ref)], sym, f'端末{i}｜ユニット')
                         break
         for r in mat['rows']:
             w = (r.get('wire') or {}).get('src')

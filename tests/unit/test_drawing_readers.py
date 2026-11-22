@@ -68,6 +68,49 @@ def test_frame_and_revision_inserts_are_skipped(tmp_path):
     assert [t.s for t in load(doc, tmp_path).txts] == ['OTHER']
 
 
+def _jzb(doc, msp, name, size, word, scale=1.0):
+    """文字 word と、一辺 size の線2本（外接矩形が size×size）を持つ JZB ブロックを置く。"""
+    block = doc.blocks.new(name)
+    block.add_text(word, dxfattribs={'insert': (1, 1), 'height': 3})
+    block.add_line((0, 0), (size, 0))
+    block.add_line((0, 0), (0, size))
+    block.add_lwpolyline([(0, 0), (size, 0), (size, size)])
+    msp.add_blockref(name, (0, 0), dxfattribs={'xscale': scale, 'yscale': scale})
+
+
+@pytest.mark.parametrize('size, scale, read', [(100, 1.0, True), (110, 1.0, True), (149, 1.0, True), (175, 1.0, False), (200, 1.0, False),
+                                               (100, 2.0, False)])
+def test_small_jzb_block_text_is_read_but_a_large_one_is_a_drawing_frame(tmp_path, size, scale, read):
+    """守るもの（ユーザー報告 2026-11-22。EE3298-553-12D の M65123: 製作図の `ACCESSORY CABLE`・`付属コネクタ` は小さな JZB ブロックの中にある）:
+    ブロック `JZB_*` の外接矩形の長辺（×尺度）が 150 未満なら記載のブロックなので中の文字を読み、150 以上なら図面枠・情報枠なので読まない。
+    ケーブル図 106枚の JZB は 110 以下（記載）と 175 以上（枠）に分かれる。以前は JZB をすべて図面枠として読み飛ばし、記載の文字が製作図に入らなかった。"""
+    doc, msp = new_doc()
+    _jzb(doc, msp, 'JZB_0003', size, 'ACCESSORY CABLE', scale)
+    assert [t.s for t in load(doc, tmp_path).txts] == (['ACCESSORY CABLE'] if read else [])
+
+
+def test_lines_inside_a_small_jzb_block_are_not_collected(tmp_path):
+    """守るもの: 小さな JZB ブロックは文字だけを読み、中の線・ポリライン・弧は電線の連結に混ぜない。混ぜると製作図の接続が 457→456、芯線が
+    791→789 に減り、○ だった PIN が × になる判定の悪化が5件出た（EE6888-639-01A ほか。実データで測った）。"""
+    doc, msp = new_doc()
+    _jzb(doc, msp, 'JZB_0003', 100, '付属コネクタ')
+    geo = load(doc, tmp_path)
+    assert [t.s for t in geo.txts] == ['付属コネクタ'] and geo.lines == [] and geo.polys == []
+
+
+def test_text_in_a_block_nested_in_a_small_jzb_block_is_read_and_its_lines_are_not(tmp_path):
+    doc, msp = new_doc()
+    inner = doc.blocks.new('INNER')
+    inner.add_text('NESTED', dxfattribs={'insert': (0, 0), 'height': 3})
+    inner.add_line((0, 0), (5, 0))
+    outer = doc.blocks.new('JZB_0004')
+    outer.add_blockref('INNER', (2, 2))
+    outer.add_line((0, 0), (80, 0))
+    msp.add_blockref('JZB_0004', (0, 0))
+    geo = load(doc, tmp_path)
+    assert [t.s for t in geo.txts] == ['NESTED'] and geo.lines == []
+
+
 def test_polyline_edges_and_arc_ends_are_collected_separately(tmp_path):
     doc, msp = new_doc()
     line(msp, (0, 0), (10, 0))

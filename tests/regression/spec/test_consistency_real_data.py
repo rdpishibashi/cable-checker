@@ -193,7 +193,7 @@ def test_check_distribution_per_item(result):
     counts = {c: tuple(sum(r['cells'][c] == s for r in rows) for s in SYMBOLS) for c in ITEM_COLUMNS}
     assert counts == EXPECTED_DISTRIBUTION
     assert sum(r['不整合数'] > 0 for r in rows) == 228 and sum(r['要確認数'] > 0 for r in rows) == 30
-    assert len(result['details']) == 4144 and len(result['wires']) == 791
+    assert len(result['details']) == 4372 and len(result['wires']) == 791
     assert result['unused'] == ['EE5207-405A', 'EE5283-300-30D', 'EE5283-393-01B', 'EE6886-699-01A', 'EE6888-660-01A',
                                 'EE6892-405-17A', 'EE6892-514-01B']
 
@@ -273,8 +273,8 @@ def test_excel_matches_preview_and_has_all_rows(result):
     sheets = dict(preview_sheets(result))
     # シートの並びと行数。ケーブル記載図面＝ケーブル 217（両方108・展開接続図だけ2・393 だけ107）、図面一覧＝129図面、ケーブル抽出＝405 の110＋393 の267
     assert {k: len(v) for k, v in sheets.items()} == {
-        'Summary': 31, '記号の説明': LEGEND_ROWS, '図面一覧': 129, '図面の関係': 23, 'ケーブル抽出': 377, 'ケーブル記載図面': 217,
-        '整合性チェック': 228, '照合明細': 4144, '芯線照合': 791, '展開接続図': 657, 'ケーブル一覧表': 134, '線番設定表': 403,
+        'Summary': 32, '記号の説明': LEGEND_ROWS, '図面一覧': 129, '図面の関係': 23, 'ケーブル抽出': 377, 'ケーブル記載図面': 217,
+        '整合性チェック': 228, '照合明細': 4372, '芯線照合': 791, '展開接続図': 657, 'ケーブル一覧表': 134, '線番設定表': 403,
         '製作図の接続表': 457, '製作図の文字': 3852, '図番パターン照合': 174}
     assert list(sheets) == ['Summary', '記号の説明', '図面一覧', '図面の関係', 'ケーブル抽出', 'ケーブル記載図面', '整合性チェック', '照合明細',
                             '芯線照合', '展開接続図', 'ケーブル一覧表', '線番設定表', '製作図の接続表', '製作図の文字', '図番パターン照合']

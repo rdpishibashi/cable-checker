@@ -35,8 +35,8 @@ import ezdxf
 from . import cable_list_table, fab_drawing, wire_number_table
 from .cable_compare import compare_extracts
 from .cable_extractor import extract_cables
-from .cell_values import SEP, code_matches_name, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
-from .cell_values import side as _side, squash as _squash, values as _values
+from .cell_values import SEP, awg_sizes, code_matches_name, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
+from .cell_values import side as _side, size_key, squash as _squash, values as _values
 from . import highlights
 from .drawing_geometry import load
 from .schematic_reader import analyze_schematic
@@ -61,7 +61,7 @@ PHASE_SCHEMATIC = '展開接続図の読み取り'
 ITEMS = [
     ('図面の対応', '一覧表'), ('図面の対応', '製作図'), ('図面の対応', '線番設定表'), ('図面の対応', '展開接続図'),
     *[(f'端末{i}', x) for i in (1, 2) for x in ('ユニット', 'モジュール', '機器符号', '部品種別')],
-    ('ケーブル', '種類'), ('ケーブル', '芯数'),
+    ('ケーブル', '種類'), ('ケーブル', 'サイズ'), ('ケーブル', '芯数'),
     ('芯線', '線番'), ('芯線', 'PIN'), ('芯線', '色'),
 ]
 
@@ -739,6 +739,43 @@ def _fab_text_cell(label, values, fabs, fab_ok):
     return cell
 
 
+def _size_cell(row, ch, pick):
+    """ケーブルの サイズ（一覧表のサイズ ⇔ 図面の AWG の数字）のセル。
+
+    製作図: 記載の文字（注記ブロックを除く）にある AWG の数字のうち、一覧表のサイズの値のすべてが含まれれば ○。AWG はあるが合わなければ ×
+    （アース線 GNYE の AWG も数える）。AWG の記載が無ければ比べない。展開接続図: 選んだ出現の備考にある AWG の数字だけを同じ規則で比べる。"""
+    values = _values(row.get('サイズ'))
+    cell = _Cell('ケーブル サイズ').value('一覧表', SEP.join(values))
+    if not values:
+        cell.note = B_EMPTY
+        return cell
+    keys = [size_key(v) for v in values]
+
+    def compare(kind, found):
+        ok = all(k in found for k in keys)
+        shown = '、'.join(f'AWG{n}' for n in sorted(found, key=lambda n: (len(n), n)))
+        cell.add(kind, OK if ok else NG, B_MATCH if ok else f'図面は {shown}')
+        cell.value(kind, shown)
+
+    if not ch['fab_ok']:
+        cell.note = '製作図の図面が特定できない'
+    else:
+        found = set()
+        for d in ch['fabs']:
+            for t, _ in d.get('fab_text_refs', []):
+                found |= awg_sizes(t)
+        if found:
+            compare('製作図', found)
+            cell.source(*(d['drawing_number'] for d in ch['fabs']))
+        else:
+            cell.note = '製作図に AWG の記載が無い'
+    found_405 = awg_sizes(pick['occ']['remark']) if pick is not None else set()
+    if found_405:
+        compare('展開接続図', found_405)
+        cell.source(pick['drawing']['drawing_number'])
+    return cell
+
+
 def _count_cells(row, ch, sel, mine, fab_conns, pick, multi):
     """ケーブルの 種類（405 の備考との比較）・芯数 のセル。"""
     kind_cell = _fab_text_cell('ケーブル 種類', _values(row.get('ケーブル種類')), ch['fabs'], ch['fab_ok'])
@@ -1181,6 +1218,7 @@ def _evaluate_row(ctx, list_name, row):
             cells[item_column(f'端末{i}', name)] = [c]
     kind_cell, core_cell = _count_cells(row, ch, sel, mine, fab_conns, pick, multi)
     cells[item_column('ケーブル', '種類')] = [kind_cell]
+    cells[item_column('ケーブル', 'サイズ')] = [_size_cell(row, ch, pick)]
     cells[item_column('ケーブル', '芯数')] = [core_cell]
     num_cell, pin_cell, color_cell, mat, wr = _wire_cells(ctx, row, ch, sel, mine, pick, multi, fab_conns, sibling_sel)
     cells[item_column('芯線', '線番')] = [num_cell]

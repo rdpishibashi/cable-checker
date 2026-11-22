@@ -7,8 +7,8 @@
 """
 import re
 
-from .cell_values import code_matches_name, codes as _codes, is_color as _is_color, item_column, side as _side, squash as _squash, values as _values
-from .symbols import NA, worst as _worst
+from .cell_values import awg_sizes, code_matches_name, codes as _codes, is_color as _is_color, item_column, side as _side, size_key, squash as _squash, values as _values
+from .symbols import NA, OK, worst as _worst
 
 
 def _cmp(cells, col, kind):
@@ -38,7 +38,8 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
     # --- 一覧表: セルごとの記号（最も重い比較）
     refs = row.get('_refs', {})
     list_map = [(('図面の対応', '一覧表'), ['ケーブル番号']), (('図面の対応', '製作図'), ['製作図パターン']),
-                (('図面の対応', '展開接続図'), ['接続図パターン']), (('ケーブル', '種類'), ['ケーブル種類']), (('ケーブル', '芯数'), ['芯数'])]
+                (('図面の対応', '展開接続図'), ['接続図パターン']), (('ケーブル', '種類'), ['ケーブル種類']), (('ケーブル', 'サイズ'), ['サイズ']),
+                (('ケーブル', '芯数'), ['芯数'])]
     for i in (1, 2):
         list_map += [((f'端末{i}', n), [f'端末{i}_{n}']) for n in ('ユニット', 'モジュール', '機器符号', '部品種別')]
     for (g, n), fields in list_map:
@@ -82,15 +83,29 @@ def row_marks(list_name, row, cells, ch, sel, pick, mat, fab_conns):
                 else:
                     hit = [(t, ref) for t, ref in d.get('fab_text_refs', []) if key and key in _squash(t)]
                 out += _marks_of(dn, hit, sym, f'{g}｜{n}')
+        # サイズ: ○ のときは一覧表のサイズに合う AWG の文字だけ、× のときは AWG の数字を含む文字すべて（アース線の AWG を含む）
+        size_sym = _cmp(cells, col('ケーブル', 'サイズ'), '製作図')
+        if size_sym is not None:
+            keys = {size_key(v) for v in _values(row.get('サイズ'))}
+            hit = [(t, ref) for t, ref in d.get('fab_text_refs', [])
+                   if awg_sizes(t) and (size_sym != OK or awg_sizes(t) & keys)]
+            out += _marks_of(dn, hit, size_sym, 'ケーブル｜サイズ')
     # --- 展開接続図（照合に使った出現）
     if pick is not None:
         dn, occ, orient = pick['drawing']['drawing_number'], pick['occ'], pick['orient']
         label_sym = _combine(_cmp(cells, col('図面の対応', '展開接続図'), '展開接続図'), _cmp(cells, col('ケーブル', '種類'), '展開接続図'))
+        if _cmp(cells, col('ケーブル', 'サイズ'), '展開接続図') and not occ.get('_remark_ref'):
+            label_sym = _combine(label_sym, _cmp(cells, col('ケーブル', 'サイズ'), '展開接続図'))   # AWG はラベル自身の文字（番号の後ろ）にある
         out += _marks_of(dn, [(occ['cable'], occ.get('_label_ref'))], label_sym, '図面の対応｜展開接続図')
         # ラベルのすぐ下の別の文字を備考にしたとき（`ACCESSORY CABLE`）は、その文字を「ケーブル｜種類」の展開接続図の比較の記号で強調する
         remark_sym = _cmp(cells, col('ケーブル', '種類'), '展開接続図')
-        if occ.get('_remark_ref') and remark_sym:
-            out += _marks_of(dn, [occ['_remark_ref']], remark_sym, 'ケーブル｜種類')
+        # 備考の AWG の数字（サイズの比較）: ラベルの下の別の文字にあればその文字を、ラベル自身にあればラベルの強調に重ねる
+        size_sym = _cmp(cells, col('ケーブル', 'サイズ'), '展開接続図')
+        remark_ref = occ.get('_remark_ref')
+        if remark_ref and size_sym and awg_sizes(remark_ref[0]):
+            remark_sym = _combine(remark_sym, size_sym)
+        if remark_ref and remark_sym:
+            out += _marks_of(dn, [remark_ref], remark_sym, 'ケーブル｜種類')
         for i in (1, 2):
             side = orient['sides'][i]
             code_sym = _combine(_cmp(cells, col(f'端末{i}', '機器符号'), '展開接続図'))

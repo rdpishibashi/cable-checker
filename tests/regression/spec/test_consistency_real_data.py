@@ -58,6 +58,7 @@ EXPECTED_DISTRIBUTION = {
     '端末2｜機器符号': (85, 0, 10, 18, 115),
     '端末2｜部品種別': (17, 0, 104, 0, 107),
     'ケーブル｜種類': (28, 0, 101, 0, 99),
+    'ケーブル｜サイズ': (37, 0, 2, 0, 189),
     'ケーブル｜芯数': (54, 8, 40, 0, 126),
     '芯線｜線番': (50, 0, 6, 0, 172),
     '芯線｜PIN': (57, 1, 24, 2, 144),
@@ -68,7 +69,7 @@ M65206_ROW = {
     '図面の対応｜一覧表': '○', '図面の対応｜製作図': '○', '図面の対応｜線番設定表': '○', '図面の対応｜展開接続図': '○',
     '端末1｜ユニット': '○', '端末1｜モジュール': '－', '端末1｜機器符号': '○', '端末1｜部品種別': '○',
     '端末2｜ユニット': '△', '端末2｜モジュール': '○', '端末2｜機器符号': '○', '端末2｜部品種別': '○',
-    'ケーブル｜種類': '○', 'ケーブル｜芯数': '－', '芯線｜線番': '○', '芯線｜PIN': '○', '芯線｜色': '×',
+    'ケーブル｜種類': '○', 'ケーブル｜サイズ': '－', 'ケーブル｜芯数': '－', '芯線｜線番': '○', '芯線｜PIN': '○', '芯線｜色': '×',
 }
 
 
@@ -493,3 +494,22 @@ def test_m65232_two_sections_are_fully_matched_in_the_viewer_data(result):
     assert row2['cells']['ケーブル｜種類'] == '○' and '製作図 ○' in basis(result, row2, 'ケーブル｜種類')
     fab_marks = {(m['text'], m['symbol']) for m in secs[('ケーブル製作図', 'EE3298-556-51A')]['marks'] if m['symbol'] != '関連'}
     assert {('*1', '○'), ('SH', '○'), ('A', '○')} <= fab_marks
+
+
+def test_cable_size_is_compared_with_the_awg_written_in_the_fab_drawing(result):
+    """守るもの（ユーザー依頼 2026-11-22）: 一覧表のサイズは製作図の AWG の数字（`AWG16`・`18AWG-15C`）と比べる。
+    ○37（AWG が1つだけ合う30、ケーブル本体とアース線の AWG が並ぶ6、数字が前の `UL444 type CM 18AWG-15C` の M06020）・
+    ×2（M39021 は サイズ 26 で図面は `AWG20(GNYE)` だけ、M65232 の1行目は サイズ 10 で図面は `UL AWG20 GNYE` だけ）。
+    製作図に AWG が無い63行・サイズが空の32行は比べない（－）。ほかの項目の判定は変えない。"""
+    row = row_of(result, 'M06020')
+    assert row['cells']['ケーブル｜サイズ'] == '○' and '製作図 ○' in basis(result, row, 'ケーブル｜サイズ')
+    for cable in ('M06004', 'M39006', 'M39012', 'M39613', 'M39672', 'M65242'):      # 本体の AWG とアース線の AWG が並ぶ図面
+        assert row_of(result, cable)['cells']['ケーブル｜サイズ'] == '○', cable
+    row = row_of(result, 'M39021')
+    assert row['cells']['ケーブル｜サイズ'] == '×' and '図面は AWG20' in basis(result, row, 'ケーブル｜サイズ')
+    row = row_of(result, 'M65232', line=1)
+    assert row['cells']['ケーブル｜サイズ'] == '×' and row_of(result, 'M65232', line=2)['cells']['ケーブル｜サイズ'] == '－'
+    # viewer: M39006 は サイズ 24 で、図面に `ULシールド線 AWG24-40C`（○）と `UL AWG22 GNYE`（強調しない）がある
+    marks = [(m['text'], m['symbol']) for m in row_of(result, 'M39006')['marks'] if m['item'] == 'ケーブル｜サイズ']
+    assert ('24', '○') in marks and ('ULシールド線 AWG24-40C', '○') in marks and not any('GNYE' in t for t, _ in marks)
+

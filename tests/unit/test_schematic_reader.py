@@ -71,7 +71,7 @@ def build(tmp_path, symbol='ellipse', extras=None, name='EE0000-405-01A'):
 @pytest.fixture(autouse=True)
 def no_region_analysis(monkeypatch):
     """既定では領域抽出を空にする（合成図面に図面枠が無い）。領域の根拠のテストは自分で差し替える。"""
-    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg: {'regions': [], 'minor_regions': []})
+    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg, doc=None: {'regions': [], 'minor_regions': []})
 
 
 def read(path):
@@ -216,7 +216,7 @@ def test_tall_frame_unit_side_point_follows_the_wire_direction_not_the_frame_cen
     （細長い枠は、枠の中心への向きで決めると上下を選び、領域の外の点になる）。左のコネクタ CN1（芯線は右へ出る）の左側の領域が取れる。
     領域は、枠の中心（x=4.5）・名前の文字（y=13.5）を含まず、ユニット側の点（x=-0.6）だけを含む形にしてある。"""
     region = {'polygon': [(-20, -110), (3, -110), (3, 12), (-20, 12)], 'area': 2806.0, 'name_candidates': [(1.0, 'UNIT A')]}
-    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg: {'regions': [region], 'minor_regions': []})
+    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg, doc=None: {'regions': [region], 'minor_regions': []})
     wires = by_label(occurrence(read(build_tall(tmp_path))))
     assert wires['P021']['ends']['-']['regions'] == ['UNIT A']
     assert wires['P021']['ends']['+']['regions'] == []
@@ -326,7 +326,7 @@ def test_region_name_candidates_of_every_candidate_are_collected_for_the_end(tmp
     """端末の位置を含む領域の名称候補は、最有力でなくてもすべて集める。含まれない側は空。"""
     region = {'polygon': [(45, -2), (65, -2), (65, 14), (45, 14)], 'area': 320.0,
               'name_candidates': [(1.0, 'ALS1 R1'), (2.0, 'SHIELD COVER')]}
-    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg: {'regions': [region], 'minor_regions': []})
+    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg, doc=None: {'regions': [region], 'minor_regions': []})
     wires = by_label(occurrence(read(build(tmp_path))))
     assert wires['P021']['ends']['+']['regions'] == ['ALS1 R1', 'SHIELD COVER']
     assert wires['P021']['ends']['-']['regions'] == []
@@ -335,13 +335,13 @@ def test_region_name_candidates_of_every_candidate_are_collected_for_the_end(tmp
 def test_minor_regions_are_used_too_and_smaller_region_comes_first(tmp_path, monkeypatch):
     big = {'polygon': [(40, -5), (70, -5), (70, 20), (40, 20)], 'area': 750.0, 'name_candidates': [(1.0, 'RACK')]}
     small = {'polygon': [(45, -2), (65, -2), (65, 14), (45, 14)], 'area': 320.0, 'name_candidates': [(1.0, 'DTT01')]}
-    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg: {'regions': [big], 'minor_regions': [small]})
+    monkeypatch.setattr(sr, 'analyze_dxf_regions', lambda path, cfg, doc=None: {'regions': [big], 'minor_regions': [small]})
     wires = by_label(occurrence(read(build(tmp_path))))
     assert wires['N244']['ends']['+']['regions'] == ['DTT01', 'RACK']
 
 
 def test_region_analysis_failure_is_reported_and_reading_continues(tmp_path, monkeypatch):
-    def boom(path, cfg):
+    def boom(path, cfg, doc=None):
         raise RuntimeError('x')
 
     monkeypatch.setattr(sr, 'analyze_dxf_regions', boom)

@@ -220,10 +220,14 @@ def collect(msp, hidden=frozenset()):
     return Geometry(txts, lines, polys, arcs)
 
 
-def load(path):
-    """DXF を読んで Geometry を返す。読めないとき・文字も線も無いときは `error` に理由を入れる。"""
-    try:
-        doc = ezdxf.readfile(path)
-    except Exception as e:  # ezdxf は形式不正で IOError／DXFStructureError 等を出す
-        return Geometry([], [], [], [], error=f'読み込めません: {e}')
+def load(path, doc=None):
+    """DXF を読んで Geometry を返す。読めないとき・文字も線も無いときは `error` に理由を入れる。
+
+    `doc`（解析済みの ezdxf 文書）が渡されたら `path` を読み直さない（読み取りのみ。書き換えない）。
+    """
+    if doc is None:
+        try:
+            doc = ezdxf.readfile(path)
+        except Exception as e:  # ezdxf は形式不正で IOError／DXFStructureError 等を出す
+            return Geometry([], [], [], [], error=f'読み込めません: {e}')
     return collect(doc.modelspace(), hidden_layers(doc))

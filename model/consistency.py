@@ -30,18 +30,18 @@ import tempfile
 import unicodedata
 from collections import Counter
 
+import ezdxf
+
 from . import cable_list_table, fab_drawing, wire_number_table
 from .cable_compare import compare_extracts
 from .cable_extractor import extract_cables
 from .cell_values import SEP, code_matches_name, codes as _codes, is_color as _is_color, item_column, nfkc_squash as _nfkc_squash  # noqa: F401
 from .cell_values import side as _side, squash as _squash, values as _values
-from . import dxf_cache, highlights
+from . import highlights
 from .drawing_geometry import load
 from .schematic_reader import analyze_schematic
 from .symbols import NA, NG, OK, SEVERITY, SYMBOLS, UNREAD, WEAK  # noqa: F401  (公開名。他のモジュールとテストが consistency から使う)
 from .symbols import worst as _worst
-
-dxf_cache.install()      # 共有ファイルの `ezdxf.readfile` を、ファイル1つの処理の間だけ解析結果を使い回すものに置き換える
 
 # 判定の記号・重さは symbols.py が正（ここから公開名として使えるようにそのまま import する）
 
@@ -103,14 +103,15 @@ def _empty_drawing(name, no_text=False, drawing_set=SET_393):
             'fab_conns': [], 'fab_text_refs': [], 'schematic': None}
 
 
-def analyze_drawing(path, name):
+def analyze_drawing(path, name, doc=None):
     """DXF を1回読み、図面の dict を返す。読めなければ ValueError。
 
     Args:
         path: DXF のパス。
         name: 図番（拡張子なしのファイル名）。
+        doc: 解析済みの ezdxf 文書（省略可。渡されたら `path` を読み直さない。読み取りのみ）。
     """
-    geo = load(path)
+    geo = load(path, doc=doc)
     if geo.error:
         raise ValueError(geo.error)
     if not geo.txts:
@@ -180,7 +181,10 @@ def analyze_uploads(items_405, items_393, progress=None):
             progress(i, len(items_393), name, PHASE_DRAWINGS)
         stem = os.path.splitext(os.path.basename(name))[0]
         try:
-            extract, drawing = _with_temp_file(data, lambda path: (extract_cables(path, name), analyze_drawing(path, stem)))
+            def read_393(path, name=name, stem=stem):
+                doc = _read_doc(path)       # 1つのファイルの抽出と読み取りで、DXF の解析は1回
+                return extract_cables(path, name, doc=doc), analyze_drawing(path, stem, doc=doc)
+            extract, drawing = _with_temp_file(data, read_393)
         except Exception as e:  # noqa: BLE001 - 壊れた DXF 1件で全体を止めない
             errors.append((name, f'{type(e).__name__}: {e}'))
             continue
@@ -194,12 +198,13 @@ def analyze_uploads(items_405, items_393, progress=None):
             progress(i, len(items_405), name, PHASE_SCHEMATIC if stem in targets else PHASE_EXTRACT)
 
         def read_one(path, name=name, stem=stem):
-            # 1つのファイルの中で、抽出と展開接続図の読み取りを続けて行う（DXF の解析を1回にする。`dxf_cache`）
-            extract = extract_cables(path, name)
+            # 1つのファイルの中で、抽出と展開接続図の読み取りを続けて行う（DXF の解析は1回）
+            doc = _read_doc(path)
+            extract = extract_cables(path, name, doc=doc)
             if stem not in targets:
                 return extract, None, None
             try:
-                return extract, analyze_schematic(path, stem, title=extract.get('title', '')), None
+                return extract, analyze_schematic(path, stem, title=extract.get('title', ''), doc=doc), None
             except Exception as e:  # noqa: BLE001 - 読み取りの失敗は抽出結果を残してエラーにする
                 return extract, None, f'{type(e).__name__}: {e}'
         try:
@@ -234,14 +239,24 @@ def run_check(items_405, items_393, progress=None):
     return result, errors
 
 
+def _read_doc(path):
+    """DXF を1回読んで ezdxf 文書を返す（各処理へ `doc=` で渡し、同じファイルを何度も解析しない。読み取りのみで使う）。
+
+    読めないときは None（各処理が `doc=None` で `path` を自分で読み直し、従来どおりの文言で失敗する）。
+    """
+    try:
+        return ezdxf.readfile(path)
+    except Exception:  # noqa: BLE001 - 失敗の扱い（エラー文言）は各処理に任せる
+        return None
+
+
 def _with_temp_file(data, func):
-    """データを一時ファイルに書き、`func(path)` を呼ぶ。この中では同じ DXF を1回だけ解析する（`dxf_cache.parse_once`）。"""
+    """データを一時ファイルに書き、`func(path)` を呼ぶ。"""
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, 'input.dxf')
         with open(path, 'wb') as f:
             f.write(data)
-        with dxf_cache.parse_once():
-            return func(path)
+        return func(path)
 
 
 # ---------------------------------------------------------------- 照合の補助（パターンの解決など）

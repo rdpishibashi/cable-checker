@@ -215,11 +215,13 @@ def collect(doc):
     return g
 
 
-def load(path):
-    try:
-        doc = ezdxf.readfile(path)
-    except Exception as e:
-        return Geo(error=str(e)), None
+def load(path, doc=None):
+    """DXF を読んで (Geo, 文書) を返す。`doc`（解析済みの文書）が渡されたら `path` を読み直さない（読み取りのみ）。"""
+    if doc is None:
+        try:
+            doc = ezdxf.readfile(path)
+        except Exception as e:
+            return Geo(error=str(e)), None
     return collect(doc), doc
 
 
@@ -1371,10 +1373,11 @@ def _loop_ends(g, grid, device_rects, regions, rects, narrow, traces, path_all, 
     return {side: infos[0], other: infos[1]}
 
 
-def analyze_schematic(path, name, title=None):
+def analyze_schematic(path, name, title=None, doc=None):
     """1枚の展開接続図を読み、ケーブル番号の出現ごとの芯線と両端の事実を返す。
 
     `title` が渡されたら図面のタイトルとして使う（抽出で取得済み）。`None` なら `extract_cables()` で取る。
+    `doc`（解析済みの文書）が渡されたら、読み取り・タイトル抽出・領域検出のどれも `path` を読み直さない（読み取りのみ）。
 
     Returns:
         {'title': タイトル, 'error': 読めなかった理由（無ければ ''）, 'no_text': 文字が1つも無い,
@@ -1388,7 +1391,7 @@ def analyze_schematic(path, name, title=None):
         `nearby` は [(文字の1行目, 距離, 文字の全体), ...]（機器符号のラベルから NEAR_LABEL_DIST 以内。近い順）。
     """
     out = {'title': '', 'error': '', 'no_text': False, 'region_error': '', 'refs': [], 'occurrences': []}
-    g, _doc = load(path)
+    g, _doc = load(path, doc=doc)
     if g.error:
         out['error'] = g.error
         return out
@@ -1396,7 +1399,7 @@ def analyze_schematic(path, name, title=None):
         out['title'] = title
     else:
         try:
-            out['title'] = extract_cables(path, name).get('title', '')
+            out['title'] = extract_cables(path, name, doc=doc).get('title', '')
         except Exception:  # noqa: BLE001 - タイトルが取れなくても読み取りは続ける
             pass
     if not g.txts:
@@ -1404,7 +1407,7 @@ def analyze_schematic(path, name, title=None):
         return out
     out['refs'] = find_references([t.s for t in g.txts])
     try:
-        analysis = analyze_dxf_regions(path, REGION_CFG)
+        analysis = analyze_dxf_regions(path, REGION_CFG, doc=doc)
         regions = list(analysis.get('regions', [])) + list(analysis.get('minor_regions', []))
     except Exception as e:  # noqa: BLE001 - 領域が取れなくても、機器・近傍の根拠で判定できる
         out['region_error'] = f'{type(e).__name__}: {e}'
